@@ -292,6 +292,35 @@ class Channel:
             s += format_str % (v[0], v[1], v[2], v[-2], v[-1])
         return s
 
+    def trim(self, duration: float):
+        """Trim data arrays to a window centered at self.time_offset"""
+        if self.times is None or len(self.times) == 0:
+            return
+
+        start = self.time_offset - duration/2
+        end   = self.time_offset + duration/2
+
+        # Check if past end or before start
+        if end > self.times[-1]:
+            shift = self.times[-1] - end
+            start += shift
+            end   += shift
+
+        if start < self.times[0]:
+            shift = self.times[0] - start
+            start += shift
+            end   += shift
+
+        mask = (self.times >= start) & (self.times <= end)
+
+        self.times = self.times[mask]
+
+        if self.raw is not None:
+            self.raw = self.raw[mask]
+
+        if self.volts is not None:
+            self.volts = self.volts[mask]
+
     def calc_times_and_volts(
         self,
         sample_aligned: bool = False,

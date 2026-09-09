@@ -316,6 +316,30 @@ class _WfmParser(argparse.ArgumentParser):
         super().error(message)
 
 
+def parse_si(value: str) -> float:
+    """Parse a number with SI prefix"""
+
+    value = value.strip()
+
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    match = re.match(
+        r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(f|p|n|u|m|k|M|G|T)",
+        value
+    )
+
+    if not match:
+        raise ValueError(f"Invalid number format: {value}")
+
+    number, prefix = match.groups()
+
+    prefixes = {"f": 1e-15, "p": 1e-12, "n": 1e-9, "u": 1e-6, "m": 1e-3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
+    return float(number) * prefixes[prefix]
+
+
 def main() -> None:
     """Parse console command line arguments."""
     parser = _WfmParser(
@@ -399,6 +423,12 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--trim",
+        metavar="DURATION",
+        help="trim waveform to a window centered at time offset field",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s {version}".format(version=RigolWFM.__version__),
@@ -449,6 +479,12 @@ def main() -> None:
                 print(f"Detected model: {model}", file=sys.stderr)
 
             scope_data = RigolWFM.wfm.Wfm.from_file(filename, model, selected)
+
+            if args.trim is not None:
+                duration = parse_si(args.trim)
+                for channel in scope_data.channels:
+                    channel.trim(duration)
+
             result = actionMap[args.action](args, scope_data, filename)
             if result is False:
                 sys.exit(1)
