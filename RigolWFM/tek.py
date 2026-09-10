@@ -165,10 +165,18 @@ class TekWaveform:
     """Normalized Tektronix parser result consumed by `Channel`."""
 
     header: Header
+    logic_channels: dict[str, npt.NDArray[np.uint8]]
+    logic_x_increment: Optional[float]
+    logic_x_origin: Optional[float]
+    tekmeta: dict[str, Any]
 
     def __init__(self) -> None:
         """Initialize the normalized Tektronix wrapper."""
         self.header = Header()
+        self.logic_channels = {}
+        self.logic_x_increment = None
+        self.logic_x_origin = None
+        self.tekmeta = {}
 
     @property
     def parser_name(self) -> str:
@@ -308,6 +316,133 @@ def _parse_legacy_llwfm(data: bytes, file_name: str) -> TekWaveform:
     return obj
 
 
+_TEKMETA_MAGIC = b"tekmeta!"
+
+# tekmeta values are tagged by a single byte: 1 is a length-prefixed string and
+# the rest are fixed-width numbers.
+_TEKMETA_NUMERIC = {2: ("i", 4), 3: ("d", 8), 4: ("I", 4)}
+
+_DIGITAL_DATA_TYPE = 6
+_DIGITAL_LINES = 8
+
+
+def _parse_tekmeta(data: bytes, byte_order: str) -> dict[str, Any]:
+    """Read the `tekmeta!` key/value block that Tektronix appends after the curve.
+
+    The block is optional and its absence is not an error, so any malformed or
+    truncated block yields an empty mapping rather than raising: it is metadata,
+    and the waveform itself is still perfectly readable without it.
+
+    Args:
+        data: the whole file.
+        byte_order: ``"<"`` or ``">"``, matching the file's byte-order marker.
+
+    Returns:
+        The decoded key/value pairs, empty when there is no readable block.
+    """
+    start = data.find(_TEKMETA_MAGIC)
+    if start < 0:
+        return {}
+
+    meta: dict[str, Any] = {}
+    offset = start + len(_TEKMETA_MAGIC)
+    try:
+        (count,) = _struct.unpack_from(f"{byte_order}I", data, offset)
+        offset += 4
+        for _ in range(count):
+            (key_size,) = _struct.unpack_from(f"{byte_order}I", data, offset)
+            offset += 4
+            key = data[offset : offset + key_size].decode("utf-8", errors="replace")
+            offset += key_size
+
+            tag = data[offset]
+            offset += 1
+            if tag == 1:
+                (value_size,) = _struct.unpack_from(f"{byte_order}I", data, offset)
+                offset += 4
+                value: Any = data[offset : offset + value_size].decode("utf-8", errors="replace")
+                offset += value_size
+            elif tag in _TEKMETA_NUMERIC:
+                code, width = _TEKMETA_NUMERIC[tag]
+                (value,) = _struct.unpack_from(f"{byte_order}{code}", data, offset)
+                offset += width
+            else:  # an unknown tag makes every later entry unreadable
+                break
+            meta[key] = value
+    except (_struct.error, IndexError, UnicodeDecodeError):
+        return meta
+
+    return meta
+
+
+def _digital_line_names(meta: dict[str, Any]) -> list[str]:
+    """Return the digital line names a capture declares, in bit order."""
+    return [f"d{bit}" for bit in range(_DIGITAL_LINES) if f"d{bit}" in meta]
+
+
+def _is_digital(data_type: int, meta: dict[str, Any]) -> bool:
+    """Report whether a capture holds packed digital lines rather than volts."""
+    return data_type == _DIGITAL_DATA_TYPE or bool(_digital_line_names(meta))
+
+
+def _unpack_digital_lines(raw_bytes: bytes, names: list[str]) -> dict[str, npt.NDArray[np.uint8]]:
+    """Split packed digital bytes into one 0/1 trace per line.
+
+    Each byte holds one sample of every line, bit 0 being the first line.
+
+    Args:
+        raw_bytes: the valid region of the curve buffer.
+        names: line names in bit order, as declared by the capture.
+
+    Returns:
+        A mapping of line name to its 0/1 samples.
+    """
+    packed = np.frombuffer(raw_bytes, dtype=np.uint8)
+    return {name: ((packed >> bit) & 1).astype(np.uint8) for bit, name in enumerate(names)}
+
+
+def _digital_waveform(
+    raw_bytes: bytes,
+    meta: dict[str, Any],
+    model_str: str,
+    trace_label: str,
+    t_origin: float,
+    t_scale: float,
+) -> TekWaveform:
+    """Build a logic-only waveform from a packed digital curve buffer.
+
+    Digital captures carry no analog channel: every byte is a bit field of the
+    logic lines, so the result exposes `logic_channels` and leaves the analog
+    slots empty, the same shape the MSO5000 adapter uses.
+
+    Args:
+        raw_bytes: the valid region of the curve buffer.
+        meta: the decoded `tekmeta!` block, which names the lines.
+        model_str: instrument label for the normalized header.
+        trace_label: waveform label recorded in the file.
+        t_origin: time of the first valid sample.
+        t_scale: seconds between samples.
+
+    Returns:
+        A `TekWaveform` whose logic traces hold one 0/1 array per line.
+    """
+    names = _digital_line_names(meta) or [f"d{bit}" for bit in range(_DIGITAL_LINES)]
+
+    obj = TekWaveform()
+    header = obj.header
+    header.model = model_str
+    header.trace_label = trace_label
+    header.n_pts = len(raw_bytes)
+    header.x_origin = t_origin
+    header.x_increment = t_scale
+
+    obj.tekmeta = meta
+    obj.logic_channels = _unpack_digital_lines(raw_bytes, names)
+    obj.logic_x_increment = t_scale
+    obj.logic_x_origin = t_origin
+    return obj
+
+
 def from_file(file_name: str) -> TekWaveform:
     """Parse a Tektronix .wfm file and normalize it for `Wfm.from_file()`.
 
@@ -403,6 +538,24 @@ def from_file(file_name: str) -> TekWaveform:
     if not raw_bytes:
         raise ValueError(f"No waveform data in '{file_name}'")
 
+    meta = _parse_tekmeta(data, byte_order)
+    data_type = getattr(hdr.data_type, "value", int(hdr.data_type))
+
+    t_scale = float(imp1.dim_scale)
+    t_origin = float(imp1.dim_offset)
+
+    if _is_digital(data_type, meta):
+        # Packed logic lines, not volts.  Scaling these bytes as a voltage is
+        # what produced a meaningless analog trace before.
+        return _digital_waveform(
+            raw_bytes,
+            meta,
+            model_str=model_str,
+            trace_label=trace_label,
+            t_origin=t_origin,
+            t_scale=t_scale,
+        )
+
     # Decode ADC samples
     adc = _decode_adc(raw_bytes, fmt_code, byte_order, n_pts)
     n_pts = len(adc)
@@ -419,12 +572,11 @@ def from_file(file_name: str) -> TekWaveform:
     # data_start_offset, so its index 0 is already the first valid sample and
     # dim_offset already refers to that sample -- adding first_valid_sample
     # here would count the precharge region twice.
-    t_scale = float(imp1.dim_scale)
-    t_origin = float(imp1.dim_offset)
     x_increment = t_scale
 
     # Build normalized objects
     obj = TekWaveform()
+    obj.tekmeta = meta
     h = obj.header
     h.model = model_str
     h.trace_label = trace_label

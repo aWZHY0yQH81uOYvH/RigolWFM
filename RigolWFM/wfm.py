@@ -699,6 +699,27 @@ class Wfm:
                     new_wfm.logic_times = (
                         logic_start + np.arange(len(first_trace)) * new_wfm.logic_seconds_per_point
                     ).astype(np.float64)
+        elif pname == "tek_wfm":
+            logic_channels = getattr(w, "logic_channels", {})
+            if logic_channels:
+                # Unlike bin5000, which stores x_origin negated, the Tektronix
+                # adapter reports the true time of sample zero.
+                new_wfm.logic_channels = logic_channels
+                new_wfm.logic_observed_channels = logic_channels
+                new_wfm.logic_seconds_per_point = getattr(w, "logic_x_increment", None)
+                tek_logic_start = getattr(w, "logic_x_origin", None)
+                if tek_logic_start is not None:
+                    new_wfm.logic_time_offset = float(tek_logic_start)
+
+                first_trace = next(iter(logic_channels.values()), None)
+                if (
+                    first_trace is not None
+                    and new_wfm.logic_seconds_per_point is not None
+                    and tek_logic_start is not None
+                ):
+                    new_wfm.logic_times = (
+                        float(tek_logic_start) + np.arange(len(first_trace)) * new_wfm.logic_seconds_per_point
+                    ).astype(np.float64)
 
         # Warn when the model embedded in the file clearly disagrees with the
         # user-supplied model.  Single-character aliases (B, C, D, E, Z) and
@@ -999,6 +1020,18 @@ class Wfm:
     def plot(self) -> "Figure":
         """Plot the data in oscilloscope style and return the Figure."""
         _CH_COLORS = ["#FFFF00", "#00FFFF", "#FF00FF", "#00FF00"]
+        # Logic captures routinely run to 8 or 16 lines, so they need more than
+        # the four scope-trace colours to stay tellable apart.
+        _LOGIC_COLORS = [
+            "#ffff00",
+            "#00ffff",
+            "#ff00ff",
+            "#00ff00",
+            "#ff8800",
+            "#88aaff",
+            "#ff5577",
+            "#bbbbbb",
+        ]
 
         h_scale, h_prefix, v_scale, v_prefix = self.best_scaling()
 
@@ -1014,10 +1047,27 @@ class Wfm:
                 linewidth=0.8,
             )
 
+        # A logic-only capture has nothing on the voltage axis, so draw the
+        # traces themselves: stacked, stepped, one row per line.
+        logic_only = not self.channels and self.logic_channels and self.logic_times is not None
+        if logic_only:
+            for i, (name, trace) in enumerate(self.logic_channels.items()):
+                ax.step(
+                    np.asarray(self.logic_times) * h_scale,
+                    np.asarray(trace, dtype=np.float64) * 0.8 + i,
+                    where="post",
+                    label=name,
+                    color=_LOGIC_COLORS[i % len(_LOGIC_COLORS)],
+                    linewidth=0.8,
+                )
+            ax.set_yticks([i + 0.4 for i in range(len(self.logic_channels))])
+            ax.set_yticklabels(list(self.logic_channels), color="white")
+
         ax.set_xlabel("Time (%ss)" % h_prefix, color="white")
-        ax.set_ylabel("Voltage (%sV)" % v_prefix, color="white")
+        ax.set_ylabel("Logic" if logic_only else "Voltage (%sV)" % v_prefix, color="white")
         ax.set_title(self.basename, color="white")
-        ax.legend(loc="upper right", facecolor="black", edgecolor="#555555", labelcolor="white")
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="upper right", facecolor="black", edgecolor="#555555", labelcolor="white")
 
         ax.grid(True, which="major", color="#2a2a2a", linewidth=0.8, linestyle="-")
         ax.minorticks_on()

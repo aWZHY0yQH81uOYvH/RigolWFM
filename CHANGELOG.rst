@@ -3,6 +3,9 @@ Changelog
 
 Unreleased
 ----------
+*    decode Tektronix digital ``.wfm`` captures into one logic trace per line instead of scaling the packed bits as a voltage
+*    read the Tektronix ``tekmeta!`` block, which names the digital lines and carries IQ and label metadata
+*    plot logic traces for captures that have no analog channel, instead of writing an empty figure
 *    fix Tektronix ``.wfm`` parsing to expect the leading ``:`` in the eight-byte version string (``:WFM#003``), which no real instrument file could get past before
 *    fix the Tektronix time axis to stop counting the curve buffer precharge twice, which shifted ``t=0`` by 32 samples on files that have one
 *    add real Tektronix ``.wfm`` captures as fixtures and check them against Tektronix's own reader
