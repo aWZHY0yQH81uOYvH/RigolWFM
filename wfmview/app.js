@@ -636,6 +636,42 @@ function siglentScaledToSi(node) {
     return node.value * Math.pow(10, 3 * (node.magnitude - 8));
 }
 
+// A Siglent "data with unit" struct ends with a seven-word descriptor laid out as
+// [type, V_num, V_den, A_num, A_den, s_num, s_den].  Type 0 composes the unit from
+// rational powers of volts, amps and seconds; every other type names a unit outright
+// (1 dBV, 2 dBA, 3 dB, 4 Vpp, 5 Vdc, 6 dBm, 7 Sa, 8 div, 9 pts, 10 none, 11 degree,
+// 12 percent).  Only the few the viewer can label are distinguished.
+var SIGLENT_DIRECT_UNITS = { 4: 'V', 5: 'V' };
+var SIGLENT_COMPOSED_UNITS = { '1,0,0': 'V', '0,1,0': 'A', '1,1,0': 'W' };
+
+function siglentUnitExponent(numerator, denominator) {
+    if (!denominator) {
+        return NaN;
+    }
+    return numerator / denominator;
+}
+
+function siglentUnitFromWords(words) {
+    if (!words || words.length < 7) {
+        return '?';
+    }
+
+    var unitType = Number(words[0]);
+    if (Object.prototype.hasOwnProperty.call(SIGLENT_DIRECT_UNITS, unitType)) {
+        return SIGLENT_DIRECT_UNITS[unitType];
+    }
+    if (unitType !== 0) {
+        return '?';
+    }
+
+    var key = [
+        siglentUnitExponent(Number(words[1]), Number(words[2])),
+        siglentUnitExponent(Number(words[3]), Number(words[4])),
+        siglentUnitExponent(Number(words[5]), Number(words[6])),
+    ].join(',');
+    return SIGLENT_COMPOSED_UNITS[key] || '?';
+}
+
 function siglentEstimateVoltPerDiv(vMin, vMax, fallback) {
     if (Number.isFinite(fallback) && fallback > 0) {
         return Math.abs(fallback);
@@ -2716,6 +2752,7 @@ function buildSiglentFixedHeaderResult(options) {
             coupling: 'DC',
             voltPerDiv: siglentEstimateVoltPerDiv(vMin, vMax, options.voltDivs[slot] * probe),
             voltOffset: voltOffset,
+            unit: (options.units && options.units[slot]) || 'V',
             probeValue: options.probes[slot] || 1,
             inverted: false,
             timeScale: timeScale,
@@ -2761,6 +2798,7 @@ function buildSiglentFixedHeaderResult(options) {
             coupling: 'DC',
             voltPerDiv: siglentEstimateVoltPerDiv(0, 0, trace.voltDiv),
             voltOffset: trace.vertPos,
+            unit: trace.unit || 'V',
             probeValue: 1,
             inverted: false,
             timeScale: trace.points * trace.xIncrement / 10,
@@ -2793,6 +2831,7 @@ function siglentV4MathTraces(v4) {
             points: points,
             voltDiv: siglentScaledToSi(v4.mathVoltDiv.entries[index]),
             vertPos: siglentScaledToSi(v4.mathVertPos.entries[index]),
+            unit: siglentUnitFromWords(v4.mathVoltDiv.entries[index].unitWords),
             codePerDiv: v4.mathVertCodePerDiv,
             xIncrement: v4.mathFTime.entries[index],
         });
@@ -2958,6 +2997,9 @@ function parseSiglentBin(buffer, revision) {
             codePerDivs: v4.chVertCodePerDiv14.entries.slice(),
             sampleWidth: v4.dataWidth === 0 ? 1 : 2,
             littleEndian: v4.byteOrder === 0,
+            units: v4.chVoltDiv14.entries.map(function(node) {
+                return siglentUnitFromWords(node.unitWords);
+            }),
             mathTraces: siglentV4MathTraces(v4),
         });
     }
@@ -4045,6 +4087,30 @@ function createAxisLabelFormatter(axis, unit) {
     };
 }
 
+function sharedChannelUnit(channels) {
+    var unit = '';
+    for (var i = 0; i < (channels || []).length; i++) {
+        var channel = channels[i];
+        if (!channel || channel.kind === 'digital') {
+            continue;
+        }
+        var channelUnit = channel.unit || 'V';
+        if (!unit) {
+            unit = channelUnit;
+        } else if (unit !== channelUnit) {
+            // One vertical axis cannot label mixed units, so label neither.
+            return '';
+        }
+    }
+    return unit || 'V';
+}
+
+var AXIS_TITLES = { V: 'Voltage', A: 'Current', W: 'Power' };
+
+function axisTitleForUnit(unit) {
+    return AXIS_TITLES[unit] || 'Amplitude';
+}
+
 function axisTitleText(label, formatter) {
     return label + ' [' + formatter.prefix + formatter.unit + ']';
 }
@@ -4354,10 +4420,11 @@ function render(result) {
     var vMinorTicks = buildAxisTickValues(vAx, 5);
     var tMajorTicks = buildAxisTickValues(tAx, 1);
     var vMajorTicks = buildAxisTickValues(vAx, 1);
+    var vUnit = sharedChannelUnit(result.channels);
     var tLabelFormatter = createAxisLabelFormatter(tAx, 's');
-    var vLabelFormatter = createAxisLabelFormatter(vAx, 'V');
+    var vLabelFormatter = createAxisLabelFormatter(vAx, vUnit);
     var tAxisTitle = axisTitleText('Time', tLabelFormatter);
-    var vAxisTitle = axisTitleText('Voltage', vLabelFormatter);
+    var vAxisTitle = axisTitleText(axisTitleForUnit(vUnit), vLabelFormatter);
     var theme = currentPlotTheme();
 
     function xOf(t) {
@@ -4501,10 +4568,11 @@ function renderToSVG(result) {
     var vMinorTicks = buildAxisTickValues(vAx, 5);
     var tMajorTicks = buildAxisTickValues(tAx, 1);
     var vMajorTicks = buildAxisTickValues(vAx, 1);
+    var vUnit = sharedChannelUnit(result.channels);
     var tLabelFormatter = createAxisLabelFormatter(tAx, 's');
-    var vLabelFormatter = createAxisLabelFormatter(vAx, 'V');
+    var vLabelFormatter = createAxisLabelFormatter(vAx, vUnit);
     var tAxisTitle = axisTitleText('Time', tLabelFormatter);
-    var vAxisTitle = axisTitleText('Voltage', vLabelFormatter);
+    var vAxisTitle = axisTitleText(axisTitleForUnit(vUnit), vLabelFormatter);
     var theme = currentPlotTheme();
 
     function xOf(t) {
@@ -4884,7 +4952,7 @@ function buildExportCSVText(entry) {
     rows.push(
         hUnitPrefix + 's,' +
         chs.map(function(c) {
-            return c.kind === 'digital' ? 'STATE' : (vUnitPrefix + 'V');
+            return c.kind === 'digital' ? 'STATE' : (vUnitPrefix + (c.unit || 'V'));
         }).join(',') +
         ',' + formatExportFloat(off) +
         ',' + formatExportFloat(incr)

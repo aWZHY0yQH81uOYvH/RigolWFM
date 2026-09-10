@@ -8,7 +8,7 @@ Unreleased
 *    read the Siglent unit descriptor so a channel in amps display mode reports amps instead of volts
 *    detect and normalize Siglent V4.0 math (F1-F4) saves, which leave every ``ch_on`` flag clear
 *    use the zoom window timebase for Siglent V4.0 zoom (Z1-Z4) saves
-*    apply the same Siglent V4.0 fixes to ``wfmview`` so the browser viewer and the library agree
+*    apply the same Siglent V4.0 fixes to ``wfmview``, including the unit descriptor, so the browser viewer and the library agree
 *    add SDS814X HD captures as Siglent test fixtures
 
 1.5.0 (2026-04-05)

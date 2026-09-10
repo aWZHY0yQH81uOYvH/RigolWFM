@@ -1650,6 +1650,50 @@ def test_wfmview_siglent_v4_helpers_execute_under_node():
         if (Math.abs(trace.secondsPerPoint - 0.001) > 1e-12) {{
             throw new Error('Math traces are timed by math_f_time.');
         }}
+
+        // [type, V_num, V_den, A_num, A_den, s_num, s_den]
+        const unitCases = [
+            [[0, 1, 1, 0, 1, 0, 1], 'V'],
+            [[0, 0, 1, 1, 1, 0, 1], 'A'],
+            [[0, 1, 1, 1, 1, 0, 1], 'W'],
+            [[0, 0, 1, 0, 1, 1, 1], '?'],
+            [[5, 0, 0, 0, 0, 0, 0], 'V'],
+            [[3, 0, 0, 0, 0, 0, 0], '?'],
+        ];
+        for (const [words, want] of unitCases) {{
+            if (siglentUnitFromWords(words) !== want) {{
+                throw new Error('Unit descriptor ' + words.join(',') + ' should read as ' + want + '.');
+            }}
+        }}
+
+        if (sharedChannelUnit([{{ unit: 'A' }}, {{ kind: 'digital' }}]) !== 'A') {{
+            throw new Error('Digital channels must not disturb the shared vertical unit.');
+        }}
+        if (sharedChannelUnit([{{ unit: 'V' }}, {{ unit: 'A' }}]) !== '') {{
+            throw new Error('Mixed units must leave the shared vertical axis unlabeled.');
+        }}
+        if (sharedChannelUnit([{{}}]) !== 'V') {{
+            throw new Error('Channels from formats without a unit stay volts.');
+        }}
+        if (axisTitleForUnit('A') !== 'Current' || axisTitleForUnit('') !== 'Amplitude') {{
+            throw new Error('Unexpected vertical axis title.');
+        }}
+
+        getVisibleChannelsForEntry = function() {{
+            return [{{
+                name: 'CH1',
+                unit: 'A',
+                kind: 'analog',
+                volts: [0.1, 0.2],
+                times: [0, 1e-3],
+                timeScale: 1e-3,
+                voltPerDiv: 0.1,
+            }}];
+        }};
+        const csvRows = buildExportCSVText({{}}).split('\\n');
+        if (csvRows[1] !== 'ms,mA,0,1') {{
+            throw new Error('CSV columns should carry the unit of each channel, got: ' + csvRows[1]);
+        }}
     """)
 
     subprocess.run(["node", "-e", script], check=True, text=True)
