@@ -31,8 +31,9 @@ Time axis
 ---------
   t[i] = imp_dim1.dim_offset + i * imp_dim1.dim_scale
 
-where ``i = 0`` is the first sample in the curve buffer and valid user data
-starts at ``curve.first_valid_sample``.
+where ``i = 0`` is the first *valid* sample.  A curve buffer may open with a
+precharge region, which ``curve.data_start_offset`` skips; ``dim_offset`` is
+already measured from the first valid sample, not from the buffer start.
 """
 
 import io as _io
@@ -414,9 +415,12 @@ def from_file(file_name: str) -> TekWaveform:
     # Volts per division: user_scale from user-view data (volts/div)
     volt_per_div = float(exp1.user_scale) if float(exp1.user_scale) != 0 else abs(dim_scale) * 25
 
-    # Time axis: t[i] = dim_offset + (first_valid_sample + i) * dim_scale
+    # Time axis: t[i] = dim_offset + i * dim_scale.  `adc` was sliced from
+    # data_start_offset, so its index 0 is already the first valid sample and
+    # dim_offset already refers to that sample -- adding first_valid_sample
+    # here would count the precharge region twice.
     t_scale = float(imp1.dim_scale)
-    t_origin = float(imp1.dim_offset) + int(curve.first_valid_sample) * t_scale
+    t_origin = float(imp1.dim_offset)
     x_increment = t_scale
 
     # Build normalized objects
