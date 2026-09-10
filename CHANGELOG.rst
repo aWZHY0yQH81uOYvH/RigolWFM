@@ -4,6 +4,7 @@ Changelog
 Unreleased
 ----------
 *    fix Siglent V4.0 voltage conversion: subtract ``vert_offset`` and apply the probe factor (verified against SDS814X HD captures of known levels)
+*    report Siglent V4.0 volts/div with the probe factor applied so it matches the scaled data
 *    add SDS814X HD captures as Siglent test fixtures
 
 1.5.0 (2026-04-05)

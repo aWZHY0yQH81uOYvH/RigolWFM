@@ -305,16 +305,19 @@ _ROOT = Path(__file__).resolve().parents[1]
 # the vendor PDF's "+ vert_offset" and an unapplied probe factor both land far outside
 # these tolerances.
 _V4_KNOWN_LEVEL_CASES = [
-    ("SDS814X-3v0-probe1x.bin", 3.0),  # 3.0 V line, 1x probe, 1 V/div
-    ("SDS814X-3v0-probe10x.bin", 3.0),  # same line, 10x probe, 0.1 V/div stored
-    ("SDS814X-4v5-dc.bin", 4.5),  # flat 4.5 V DC, 0 V far off-screen
+    ("SDS814X-3v0-probe1x.bin", 3.0, 1.0),  # 3.0 V line, 1x probe, 1 V/div
+    ("SDS814X-3v0-probe10x.bin", 3.0, 1.0),  # same line, 10x probe, 0.1 V/div stored
+    ("SDS814X-4v5-dc.bin", 4.5, 0.2),  # flat 4.5 V DC, 0 V far off-screen, 10x probe
 ]
 
 
-@pytest.mark.parametrize("file_name, expected_high", _V4_KNOWN_LEVEL_CASES)
-def test_siglent_v4_known_levels(file_name, expected_high):
+@pytest.mark.parametrize("file_name, expected_high, expected_volt_per_division", _V4_KNOWN_LEVEL_CASES)
+def test_siglent_v4_known_levels(file_name, expected_high, expected_volt_per_division):
     """V4.0 captures of known levels decode to the expected voltages."""
     waveform = RigolWFM.wfm.Wfm.from_file(str(_ROOT / "tests" / "files" / "bin" / file_name), model="auto")
-    volts = np.asarray(waveform.channels[0].volts)
+    channel = waveform.channels[0]
+    volts = np.asarray(channel.volts)
     high = float(np.median(volts[volts >= (volts.min() + volts.max()) / 2.0]))
     assert high == pytest.approx(expected_high, abs=0.1)
+    # the reported scale must describe the probe-scaled volts, not the stored volt_div
+    assert channel.volt_per_division == pytest.approx(expected_volt_per_division, rel=1e-6)
