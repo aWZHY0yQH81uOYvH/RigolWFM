@@ -3,7 +3,7 @@ Changelog
 
 Unreleased
 ----------
-*    add ``pwl`` output for LTspice piecewise linear sources, which keep the absolute voltages that ``wav`` scales away
+*    add ``pwl`` output for LTspice piecewise linear sources, which preserve the waveform's voltage scale and offset instead of LTspice's fixed -1 V to +1 V WAV full-scale range
 *    fix Siglent V4.0 voltage conversion: subtract ``vert_offset`` and apply the probe factor (verified against SDS814X HD captures of known levels)
 *    report Siglent V4.0 volts/div with the probe factor applied so it matches the scaled data
 *    read the Siglent unit descriptor so a channel in amps display mode reports amps instead of volts

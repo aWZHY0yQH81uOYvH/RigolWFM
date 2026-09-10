@@ -135,7 +135,13 @@ def csv(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> 
 
 
 def pwl(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> bool:
-    """Create a PWL file for use in LTspice."""
+    """Create a piecewise linear (PWL) file for use in LTspice.
+
+    A PWL file holds explicit time/voltage pairs, so it preserves the
+    waveform's voltage scale and offset; LTspice instead reads a WAV source
+    against a fixed -1 V to +1 V full-scale range.  The output is a headerless,
+    tab-separated, two-column text file representing one waveform.
+    """
     pwl_name = _output_path(infile, ".pwl", args.output_dir)
 
     if os.path.isfile(pwl_name) and not args.force:

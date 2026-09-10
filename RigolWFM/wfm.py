@@ -1070,20 +1070,25 @@ class Wfm:
         return s
 
     def pwl(self) -> str:
-        """Return a tab-separated piecewise-linear table for LTspice.
+        """Return a piecewise linear (PWL) table for LTspice.
 
-        Unlike `wav()`, a PWL source keeps the absolute voltage of the trace.
-        LTspice wants a single source per file, so exactly one channel may be
-        enabled and selected.  Times are shifted so the first sample sits at
-        t=0, since a PWL source starts when the simulation does.  Seven
-        significant digits keep the file small while staying well inside the
-        resolution of any scope this library reads.
+        Unlike a WAV source, which LTspice interprets using a fixed -1 V to
+        +1 V full-scale range, a PWL file contains explicit time/voltage pairs,
+        preserving the waveform's voltage scale and offset.  It is a
+        headerless, two-column plain-text file representing one waveform; this
+        exporter uses tabs as separators.
+
+        Since a PWL source starts when the simulation does, times are shifted
+        so that the first sample sits at t=0.  Both columns carry seven
+        significant digits, which keeps the file small while staying well
+        inside the resolution of any scope this library reads.
 
         Returns:
             The PWL table, or an empty string when no channel carries data.
 
         Raises:
-            ValueError: if more than one channel is enabled and selected.
+            ValueError: if more than one channel is enabled and selected,
+                since one file describes one waveform.
         """
         usable = [
             ch
