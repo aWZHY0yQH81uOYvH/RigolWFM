@@ -1070,23 +1070,39 @@ class Wfm:
         return s
 
     def pwl(self) -> str:
-        """Return a PWL file for use in LTspice"""
-        ch = [
+        """Return a tab-separated piecewise-linear table for LTspice.
+
+        Unlike `wav()`, a PWL source keeps the absolute voltage of the trace.
+        LTspice wants a single source per file, so exactly one channel may be
+        enabled and selected.  Times are shifted so the first sample sits at
+        t=0, since a PWL source starts when the simulation does.  Seven
+        significant digits keep the file small while staying well inside the
+        resolution of any scope this library reads.
+
+        Returns:
+            The PWL table, or an empty string when no channel carries data.
+
+        Raises:
+            ValueError: if more than one channel is enabled and selected.
+        """
+        usable = [
             ch
             for ch in self.channels
             if ch.enabled_and_selected and ch.times is not None and ch.volts is not None and ch.points > 0
         ]
 
-        if len(ch) == 0:
+        if len(usable) == 0:
             return ""
 
-        if len(ch) > 1:
-            raise ValueError("PWL supports only one channel")
+        if len(usable) > 1:
+            names = ", ".join(ch.name for ch in usable)
+            raise ValueError(f"PWL supports only one channel, but {names} are enabled and selected")
 
-        ch = ch[0]
-        t0 = ch.times[0]
+        channel = usable[0]
+        t0 = channel.times[0]
 
-        return "\n".join([f"{t-t0:.7g}\t{v:.7g}" for t, v in zip(ch.times, ch.volts)])
+        rows = [f"{t - t0:.7g}\t{v:.7g}" for t, v in zip(channel.times, channel.volts)]
+        return "\n".join(rows) + "\n"
 
     def sigrokcsv(self) -> str:
         """Return a string of comma separated values for sigrok."""

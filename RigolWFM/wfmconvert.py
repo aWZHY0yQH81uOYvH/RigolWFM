@@ -134,25 +134,34 @@ def csv(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> 
         f.write(b)
 
 
-def pwl(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> None:
+def pwl(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> bool:
     """Create a PWL file for use in LTspice."""
     pwl_name = _output_path(infile, ".pwl", args.output_dir)
 
     if os.path.isfile(pwl_name) and not args.force:
         print(f"'{pwl_name}' exists, use --force to overwrite")
-        return
+        return True
 
-    if len(args.channel) > 1:
+    # A PWL source drives one node, so the file may hold only one trace.  Which
+    # channels survive `--channel` is a property of the waveform, not of the
+    # option text, so let the export decide and report what it found.
+    try:
+        s = scope_data.pwl()
+    except ValueError as e:
         print(
-            f"wfmconvert error: pwl supports only one channel; got --channel {args.channel}.\n",
+            f"wfmconvert error: {e}.\nUse --channel to select a single channel.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return False
 
-    s = scope_data.pwl()
+    if not s:
+        print("No analog channels are available to export to PWL.", file=sys.stderr)
+        return False
+
     with open(pwl_name, "wb") as f:
         b = s.encode(encoding="utf-8")
         f.write(b)
+    return True
 
 
 def npz(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> None:
@@ -355,6 +364,7 @@ def main() -> None:
             wfmconvert --channel 124 sigrok DS1102E.wfm
             wfmconvert --channel 3 --scale scope wav DS1102E.wfm
             wfmconvert --channel 12 --scale scope wav DS1102E.wfm
+            wfmconvert --channel 1 pwl DS1102E.wfm
             wfmconvert --model C info DS1042C-A.wfm
         """),
     )
@@ -435,7 +445,7 @@ def main() -> None:
         mat:    save waveform arrays in a MATLAB `.mat` file
         png:    save a waveform plot as a PNG image (use --dpi to set resolution)
         wav:    convert to a WAV sound format file for use with Pulseview or LTspice.
-        pwl:    convert to a piecewise linear file for use with LTspice
+        pwl:    convert one channel to a piecewise linear file for LTspice
         sigrok: convert to a sigrok file
         """),
     )

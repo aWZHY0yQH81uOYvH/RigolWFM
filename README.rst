@@ -114,6 +114,12 @@ If you want to create a ``.wav`` file with channels one and four as signals (usi
 
    prompt> wfmconvert --channel 14 wav *.wfm
 
+A ``.wav`` file is scaled to fill the sample range.  When LTspice needs the
+original voltages instead, use ``pwl`` for a piecewise linear source.  It holds
+one channel, so pick one when the capture has several::
+
+   prompt> wfmconvert --channel 2 pwl DS1102E.wfm
+
 The project also includes a browser-based viewer at
 <https://scottprahl.github.io/RigolWFM/>.  The current web app supports Rigol
 ``.wfm`` / ``.bin`` files, Tektronix ``.wfm`` / ``.isf`` files, LeCroy
