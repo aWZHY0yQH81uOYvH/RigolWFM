@@ -141,6 +141,16 @@ class SiglentV4Bin(KaitaiStruct):
         if hasattr(self, '_m_math_vert_code_per_div'):
             pass
 
+        _ = self.math_vert_pos
+        if hasattr(self, '_m_math_vert_pos'):
+            pass
+            self._m_math_vert_pos._fetch_instances()
+
+        _ = self.math_volt_div
+        if hasattr(self, '_m_math_volt_div'):
+            pass
+            self._m_math_volt_div._fetch_instances()
+
         _ = self.sample_rate
         if hasattr(self, '_m_sample_rate'):
             pass
@@ -167,6 +177,20 @@ class SiglentV4Bin(KaitaiStruct):
         _ = self.wave_length
         if hasattr(self, '_m_wave_length'):
             pass
+
+        _ = self.zoom_switch
+        if hasattr(self, '_m_zoom_switch'):
+            pass
+
+        _ = self.zoom_td_val
+        if hasattr(self, '_m_zoom_td_val'):
+            pass
+            self._m_zoom_td_val._fetch_instances()
+
+        _ = self.zoom_trig_delay_val
+        if hasattr(self, '_m_zoom_trig_delay_val'):
+            pass
+            self._m_zoom_trig_delay_val._fetch_instances()
 
 
     class DataWithUnit(KaitaiStruct):
@@ -541,6 +565,28 @@ class SiglentV4Bin(KaitaiStruct):
         return getattr(self, '_m_math_vert_code_per_div', None)
 
     @property
+    def math_vert_pos(self):
+        if hasattr(self, '_m_math_vert_pos'):
+            return self._m_math_vert_pos
+
+        _pos = self._io.pos()
+        self._io.seek(816)
+        self._m_math_vert_pos = SiglentV4Bin.DataWithUnitArray4(self._io, self, self._root)
+        self._io.seek(_pos)
+        return getattr(self, '_m_math_vert_pos', None)
+
+    @property
+    def math_volt_div(self):
+        if hasattr(self, '_m_math_volt_div'):
+            return self._m_math_volt_div
+
+        _pos = self._io.pos()
+        self._io.seek(656)
+        self._m_math_volt_div = SiglentV4Bin.DataWithUnitArray4(self._io, self, self._root)
+        self._io.seek(_pos)
+        return getattr(self, '_m_math_volt_div', None)
+
+    @property
     def sample_rate(self):
         if hasattr(self, '_m_sample_rate'):
             return self._m_sample_rate
@@ -605,5 +651,38 @@ class SiglentV4Bin(KaitaiStruct):
         self._m_wave_length = self._io.read_u4le()
         self._io.seek(_pos)
         return getattr(self, '_m_wave_length', None)
+
+    @property
+    def zoom_switch(self):
+        if hasattr(self, '_m_zoom_switch'):
+            return self._m_zoom_switch
+
+        _pos = self._io.pos()
+        self._io.seek(2804)
+        self._m_zoom_switch = self._io.read_s4le()
+        self._io.seek(_pos)
+        return getattr(self, '_m_zoom_switch', None)
+
+    @property
+    def zoom_td_val(self):
+        if hasattr(self, '_m_zoom_td_val'):
+            return self._m_zoom_td_val
+
+        _pos = self._io.pos()
+        self._io.seek(2808)
+        self._m_zoom_td_val = SiglentV4Bin.DataWithUnit(self._io, self, self._root)
+        self._io.seek(_pos)
+        return getattr(self, '_m_zoom_td_val', None)
+
+    @property
+    def zoom_trig_delay_val(self):
+        if hasattr(self, '_m_zoom_trig_delay_val'):
+            return self._m_zoom_trig_delay_val
+
+        _pos = self._io.pos()
+        self._io.seek(2848)
+        self._m_zoom_trig_delay_val = SiglentV4Bin.DataWithUnit(self._io, self, self._root)
+        self._io.seek(_pos)
+        return getattr(self, '_m_zoom_trig_delay_val', None)
 
 

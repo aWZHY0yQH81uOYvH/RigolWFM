@@ -28,7 +28,7 @@ constants ambiguous between SDS1000X and SDS2000X captures.
 import math
 import os
 import struct
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -67,6 +67,7 @@ class ChannelHeader:
     probe_value: float
     inverted: bool
     coupling: str
+    unit: RigolWFM.channel.UnitEnum
 
     def __init__(self, name: str, enabled: bool) -> None:
         """Initialize channel metadata with safe defaults."""
@@ -78,11 +79,7 @@ class ChannelHeader:
         self.probe_value = 1.0
         self.inverted = False
         self.coupling = "DC"
-
-    @property
-    def unit(self) -> RigolWFM.channel.UnitEnum:
-        """Return the unit enum for volts."""
-        return RigolWFM.channel.UnitEnum.v
+        self.unit = RigolWFM.channel.UnitEnum.v
 
     @property
     def y_scale(self) -> float:
@@ -250,13 +247,31 @@ def _looks_like_v5(data: bytes, file_size: int) -> bool:
     )
 
 
+def _v4_math_sample_count(data: bytes) -> int:
+    """Total math (F1-F4) sample count claimed by a V4.0 header."""
+    if len(data) < 0x3E0:
+        return 0
+    return sum(
+        _u32le(data, 0x3D0 + 4 * index)
+        for index in range(4)
+        if _u32le(data, 0x280 + 4 * index) == 1
+    )
+
+
 def _looks_like_v4(data: bytes, file_size: int) -> bool:
     if len(data) < 0x280 or _u32le(data, 0x00) != 4:
         return False
 
     enabled = sum(_u32le(data, off) for off in (0x08, 0x0C, 0x10, 0x14) if off + 4 <= len(data))
     data_offset = _u32le(data, 0x04)
-    points = _u32le(data, 0x1EC)
+    sample_width = 1 if data[0x264] == 0 else 2
+    # A math (F1-F4) save clears every ch_on flag and stores its length in
+    # math_store_len instead, so fall back to the math payload when no analog
+    # channel is enabled.
+    if enabled > 0:
+        traces, points = enabled, _u32le(data, 0x1EC)
+    else:
+        traces, points = 1, _v4_math_sample_count(data)
     return (
         data_offset >= 0x1000
         and _all_flags(data, (0x08, 0x0C, 0x10, 0x14))
@@ -264,7 +279,7 @@ def _looks_like_v4(data: bytes, file_size: int) -> bool:
         and _looks_like_data_with_unit(data, 0x1F0)
         and data[0x264] in (0, 1)
         and data[0x265] in (0, 1)
-        and _min_payload_ok(file_size, data_offset, enabled, points, 1 if data[0x264] == 0 else 2)
+        and _min_payload_ok(file_size, data_offset, traces, points, sample_width)
     )
 
 
@@ -417,6 +432,63 @@ def _scaled_to_si(node: Any) -> float:
     return float(node.value) * (10.0 ** (3 * (magnitude - 8)))
 
 
+# A Siglent "data with unit" struct ends with a seven-word descriptor laid out as
+# [type, V_num, V_den, A_num, A_den, s_num, s_den].  Type 0 composes the unit from
+# rational powers of volts, amps and seconds; every other type names a unit outright
+# (1 dBV, 2 dBA, 3 dB, 4 Vpp, 5 Vdc, 6 dBm, 7 Sa, 8 div, 9 pts, 10 none, 11 degree,
+# 12 percent).  Only the few that `UnitEnum` can express are distinguished.
+_DIRECT_UNIT_TYPES = {4: "v", 5: "v"}
+_COMPOSED_UNITS = {
+    (1.0, 0.0, 0.0): "v",
+    (0.0, 1.0, 0.0): "a",
+    (1.0, 1.0, 0.0): "w",
+}
+
+
+def _unit_exponent(numerator: int, denominator: int) -> Optional[float]:
+    """Return one rational exponent of a Siglent unit descriptor."""
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _unit_from_words(words: Any) -> RigolWFM.channel.UnitEnum:
+    """Map the seven-word unit descriptor of a Siglent field onto a `UnitEnum`."""
+    unknown = RigolWFM.channel.UnitEnum.u
+    try:
+        entries = [int(word) for word in words]
+    except (TypeError, ValueError):
+        return unknown
+    if len(entries) < 7:
+        return unknown
+
+    unit_type = entries[0]
+    if unit_type in _DIRECT_UNIT_TYPES:
+        return RigolWFM.channel.UnitEnum[_DIRECT_UNIT_TYPES[unit_type]]
+    if unit_type != 0:
+        return unknown
+
+    exponents = (
+        _unit_exponent(entries[1], entries[2]),
+        _unit_exponent(entries[3], entries[4]),
+        _unit_exponent(entries[5], entries[6]),
+    )
+    name = _COMPOSED_UNITS.get(exponents)
+    return RigolWFM.channel.UnitEnum[name] if name else unknown
+
+
+class _MathTrace(NamedTuple):
+    """One enabled Siglent V4.0 math (F1-F4) trace."""
+
+    name: str
+    points: int
+    volt_div: float
+    vert_pos: float
+    code_per_div: float
+    x_increment: float
+    unit: RigolWFM.channel.UnitEnum
+
+
 def _decode_integer_codes(payload: bytes, sample_width: int, byte_order: str) -> npt.NDArray[np.uint64]:
     """Decode unsigned integer sample codes from Siglent waveform bytes."""
     if sample_width == 1:
@@ -450,12 +522,15 @@ def _assign_channel(
     x_increment: float,
     probe_value: float = 1.0,
     volt_per_division: Optional[float] = None,
+    unit: Optional[RigolWFM.channel.UnitEnum] = None,
 ) -> None:
     """Populate one normalized analog channel slot."""
     channel = header.ch[slot]
     channel.name = name
     channel.enabled = True
     channel.probe_value = probe_value
+    if unit is not None:
+        channel.unit = unit
     channel.volt_per_division = (
         abs(volt_per_division)
         if volt_per_division is not None and volt_per_division > 0
@@ -489,6 +564,8 @@ def _normalized_waveform(
     byte_order: str = "<",
     serial_number: str = "",
     software_version: str = "",
+    units: Optional[list[RigolWFM.channel.UnitEnum]] = None,
+    math_traces: Optional[list[_MathTrace]] = None,
 ) -> SiglentWaveform:
     """Normalize Siglent fixed-header analog formats into channel arrays."""
     if sample_rate <= 0:
@@ -498,12 +575,16 @@ def _normalized_waveform(
 
     sample_bytes = wave_length * sample_width
     analog_count = sum(int(flag) for flag in enabled[:4])
-    if analog_count == 0:
+    math_traces = list(math_traces or [])
+    if analog_count == 0 and not math_traces:
         raise ValueError(f"Siglent {revision} file does not enable any of the first four analog channels")
-    if len(payload) < analog_count * sample_bytes:
+
+    math_bytes = sum(trace.points * sample_width for trace in math_traces)
+    needed = analog_count * sample_bytes + math_bytes
+    if len(payload) < needed:
         raise ValueError(
-            f"Siglent {revision} payload is too short for {analog_count} enabled analog channel(s): "
-            f"expected at least {analog_count * sample_bytes} bytes, found {len(payload)}"
+            f"Siglent {revision} payload is too short for {analog_count} enabled analog channel(s) "
+            f"and {len(math_traces)} math trace(s): expected at least {needed} bytes, found {len(payload)}"
         )
 
     obj = SiglentWaveform()
@@ -549,9 +630,62 @@ def _normalized_waveform(
             x_increment=x_increment,
             probe_value=float(probes[slot]),
             volt_per_division=volt_div,
+            unit=units[slot] if units is not None and slot < len(units) else None,
         )
 
+    offset = _assign_math_traces(
+        header,
+        math_traces,
+        payload,
+        offset,
+        x_origin=x_origin,
+        sample_width=sample_width,
+        byte_order=byte_order,
+        revision=revision,
+    )
     return obj
+
+
+def _assign_math_traces(
+    header: Header,
+    math_traces: list[_MathTrace],
+    payload: bytes,
+    offset: int,
+    x_origin: float,
+    sample_width: int,
+    byte_order: str,
+    revision: str,
+) -> int:
+    """Append math (F1-F4) traces to the free channel slots and return the new payload offset."""
+    center_code = float(1 << (8 * sample_width - 1))
+    for trace in math_traces:
+        if trace.code_per_div <= 0:
+            raise ValueError(f"Siglent {revision} math trace {trace.name} has a non-positive code_per_div value")
+
+        chunk = payload[offset : offset + trace.points * sample_width]
+        offset += trace.points * sample_width
+        slot = next((i for i in range(len(header.ch)) if header.channel_data[i] is None), None)
+        if slot is None:
+            break
+
+        codes = _decode_integer_codes(chunk, sample_width=sample_width, byte_order=byte_order)
+        # Same conversion as a V4.0 analog channel, but with the math header fields
+        # and no probe factor: math traces are computed from already-scaled inputs.
+        volts = (
+            (codes.astype(np.float64) - center_code) * (trace.volt_div / trace.code_per_div) - trace.vert_pos
+        ).astype(np.float32)
+        _assign_channel(
+            header,
+            slot,
+            trace.name,
+            volts,
+            _raw_proxy_from_codes(codes, sample_width=sample_width),
+            x_origin=x_origin,
+            x_increment=trace.x_increment,
+            volt_per_division=trace.volt_div,
+            unit=trace.unit,
+        )
+    return offset
 
 
 def _normalize_v0_1(raw: Any) -> SiglentWaveform:
@@ -694,14 +828,47 @@ def _normalize_v3(raw: Any) -> SiglentWaveform:
     )
 
 
+def _v4_math_traces(raw: Any) -> list[_MathTrace]:
+    """Collect the enabled math (F1-F4) traces of a V4.0 capture."""
+    code_per_div = float(raw.math_vert_code_per_div)
+    traces = []
+    for index, switch in enumerate(raw.math_switch.entries):
+        points = int(raw.math_store_len.entries[index])
+        if not int(switch) or points <= 0:
+            continue
+
+        volt_div_node = raw.math_volt_div.entries[index]
+        traces.append(
+            _MathTrace(
+                name=f"F{index + 1}",
+                points=points,
+                volt_div=_scaled_to_si(volt_div_node),
+                vert_pos=_scaled_to_si(raw.math_vert_pos.entries[index]),
+                code_per_div=code_per_div,
+                x_increment=float(raw.math_f_time.entries[index]),
+                unit=_unit_from_words(volt_div_node.unit_words),
+            )
+        )
+    return traces
+
+
 def _normalize_v4(raw: Any) -> SiglentWaveform:
     enabled = [bool(value) for value in raw.ch_on_1_4.entries]
-    volt_divs = [_scaled_to_si(node) for node in raw.ch_volt_div_1_4.entries]
+    volt_div_nodes = list(raw.ch_volt_div_1_4.entries)
+    volt_divs = [_scaled_to_si(node) for node in volt_div_nodes]
+    units = [_unit_from_words(node.unit_words) for node in volt_div_nodes]
     vert_offsets = [_scaled_to_si(node) for node in raw.ch_vert_offset_1_4.entries]
-    time_div = _scaled_to_si(raw.time_div)
-    time_delay = _scaled_to_si(raw.time_delay)
+    grid = float(raw.hori_div_num)
+    if int(raw.zoom_switch):
+        # A zoom (Z1-Z4) save stores a slice of the parent record, so its time axis
+        # comes from the zoom window.  Its centre sits at +zoom_trig_delay_val --
+        # the opposite sign to the main axis's time_delay.
+        zoom_time_div = _scaled_to_si(raw.zoom_td_val)
+        x_origin = _scaled_to_si(raw.zoom_trig_delay_val) - zoom_time_div * grid / 2.0
+    else:
+        time_div = _scaled_to_si(raw.time_div)
+        x_origin = -(time_div * grid / 2.0) - _scaled_to_si(raw.time_delay)
     sample_rate = _scaled_to_si(raw.sample_rate)
-    x_origin = -(time_div * float(raw.hori_div_num) / 2.0) - time_delay
     sample_width = 1 if int(raw.data_width) == 0 else 2
     byte_order = "<" if int(raw.byte_order) == 0 else ">"
     probes = [float(value) for value in raw.ch_probe_1_4.entries]
@@ -720,6 +887,8 @@ def _normalize_v4(raw: Any) -> SiglentWaveform:
         code_per_divs=code_per_divs,
         sample_width=sample_width,
         byte_order=byte_order,
+        units=units,
+        math_traces=_v4_math_traces(raw),
     )
 
 

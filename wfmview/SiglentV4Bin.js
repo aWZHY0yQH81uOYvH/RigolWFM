@@ -390,6 +390,28 @@ var SiglentV4Bin = (function() {
       return this._m_mathVertCodePerDiv;
     }
   });
+  Object.defineProperty(SiglentV4Bin.prototype, 'mathVertPos', {
+    get: function() {
+      if (this._m_mathVertPos !== undefined)
+        return this._m_mathVertPos;
+      var _pos = this._io.pos;
+      this._io.seek(816);
+      this._m_mathVertPos = new DataWithUnitArray4(this._io, this, this._root);
+      this._io.seek(_pos);
+      return this._m_mathVertPos;
+    }
+  });
+  Object.defineProperty(SiglentV4Bin.prototype, 'mathVoltDiv', {
+    get: function() {
+      if (this._m_mathVoltDiv !== undefined)
+        return this._m_mathVoltDiv;
+      var _pos = this._io.pos;
+      this._io.seek(656);
+      this._m_mathVoltDiv = new DataWithUnitArray4(this._io, this, this._root);
+      this._io.seek(_pos);
+      return this._m_mathVoltDiv;
+    }
+  });
   Object.defineProperty(SiglentV4Bin.prototype, 'sampleRate', {
     get: function() {
       if (this._m_sampleRate !== undefined)
@@ -454,6 +476,39 @@ var SiglentV4Bin = (function() {
       this._m_waveLength = this._io.readU4le();
       this._io.seek(_pos);
       return this._m_waveLength;
+    }
+  });
+  Object.defineProperty(SiglentV4Bin.prototype, 'zoomSwitch', {
+    get: function() {
+      if (this._m_zoomSwitch !== undefined)
+        return this._m_zoomSwitch;
+      var _pos = this._io.pos;
+      this._io.seek(2804);
+      this._m_zoomSwitch = this._io.readS4le();
+      this._io.seek(_pos);
+      return this._m_zoomSwitch;
+    }
+  });
+  Object.defineProperty(SiglentV4Bin.prototype, 'zoomTdVal', {
+    get: function() {
+      if (this._m_zoomTdVal !== undefined)
+        return this._m_zoomTdVal;
+      var _pos = this._io.pos;
+      this._io.seek(2808);
+      this._m_zoomTdVal = new DataWithUnit(this._io, this, this._root);
+      this._io.seek(_pos);
+      return this._m_zoomTdVal;
+    }
+  });
+  Object.defineProperty(SiglentV4Bin.prototype, 'zoomTrigDelayVal', {
+    get: function() {
+      if (this._m_zoomTrigDelayVal !== undefined)
+        return this._m_zoomTrigDelayVal;
+      var _pos = this._io.pos;
+      this._io.seek(2848);
+      this._m_zoomTrigDelayVal = new DataWithUnit(this._io, this, this._root);
+      this._io.seek(_pos);
+      return this._m_zoomTrigDelayVal;
     }
   });
 
