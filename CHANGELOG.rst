@@ -9,7 +9,11 @@ Unreleased
 *    detect and normalize Siglent V4.0 math (F1-F4) saves, which leave every ``ch_on`` flag clear
 *    use the zoom window timebase for Siglent V4.0 zoom (Z1-Z4) saves
 *    apply the same Siglent V4.0 fixes to ``wfmview``, including the unit descriptor, so the browser viewer and the library agree
+*    label Siglent math traces ``F1``-``F4`` in exported output instead of the generic channel name
+*    label the ``wfmview`` vertical axis Voltage / Current / Power from the channel unit, and leave it unlabeled when channels disagree
+*    add the V4.0 math and zoom fields to ``ksy/siglent_v4_bin.ksy``
 *    add SDS814X HD captures as Siglent test fixtures
+*    known limitation: the Siglent V4.0 time axis follows the vendor document (trigger centered, ``time_delay`` subtracted); bench captures suggest the scope instead places the trigger at a horizontal reference position the file does not record
 
 1.5.0 (2026-04-05)
 ------------------
