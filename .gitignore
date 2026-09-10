@@ -5,6 +5,7 @@ __pycache__
 .cache/
 .pylint.d/
 .gh-pages/
+.generated_*_parsers.stamp
 .jupyterlite.doit.db
 .lite_src/
 .pytest_cache/
