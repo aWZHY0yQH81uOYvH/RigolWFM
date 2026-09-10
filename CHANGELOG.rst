@@ -4,6 +4,8 @@ Changelog
 Unreleased
 ----------
 *    decode Tektronix digital ``.wfm`` captures into one logic trace per line instead of scaling the packed bits as a voltage
+*    split Tektronix IQ ``.wfm`` captures into separate ``I`` and ``Q`` traces instead of returning the interleaved pairs as one trace of twice the length
+*    report the center frequency, span, RBW and window of an IQ capture in ``wfmconvert info``
 *    read the Tektronix ``tekmeta!`` block, which names the digital lines and carries IQ and label metadata
 *    plot logic traces for captures that have no analog channel, instead of writing an empty figure
 *    fix Tektronix ``.wfm`` parsing to expect the leading ``:`` in the eight-byte version string (``:WFM#003``), which no real instrument file could get past before

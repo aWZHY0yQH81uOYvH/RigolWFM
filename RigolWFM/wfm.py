@@ -139,6 +139,16 @@ _LECROY_MAGIC = b"WAVEDESC"
 _TEK_MAGIC = b"WFM#"
 _ISF_MAGIC = b":CURV"  # matches both ":CURV #" and ":CURVE #"
 
+# Acquisition parameters an IQ capture records, in the order they are reported.
+_IQ_FIELDS = (
+    ("IQ_centerFrequency", "Center Freq", "Hz"),
+    ("IQ_span", "Span", "Hz"),
+    ("IQ_rbw", "RBW", "Hz"),
+    ("IQ_sampleRate", "Sample Rate", "Hz"),
+    ("IQ_fftLength", "FFT Length", ""),
+    ("IQ_windowType", "Window", ""),
+)
+
 _CANONICAL_PARSER_NAMES = {
     "rigol_1000b_wfm": "wfm1000b",
     "rigol_1000c_wfm": "wfm1000c",
@@ -571,6 +581,7 @@ class Wfm:
         self.logic_times: npt.NDArray[np.float64] | None = None
         self.logic_seconds_per_point: float | None = None
         self.logic_time_offset: float | None = None
+        self.iq_info: dict = {}
 
     @classmethod
     def from_file(cls, file_name: str, model: str = "auto", selected: str = "1234") -> "Wfm":
@@ -700,6 +711,7 @@ class Wfm:
                         logic_start + np.arange(len(first_trace)) * new_wfm.logic_seconds_per_point
                     ).astype(np.float64)
         elif pname == "tek_wfm":
+            new_wfm.iq_info = {key: value for key, value in getattr(w, "tekmeta", {}).items() if key.startswith("IQ_")}
             logic_channels = getattr(w, "logic_channels", {})
             if logic_channels:
                 # Unlike bin5000, which stores x_origin negated, the Tektronix
@@ -878,6 +890,21 @@ class Wfm:
                 s += "        Observed     = ["
                 s += ", ".join(self.logic_observed_channels)
                 s += "]\n"
+            s += "\n"
+
+        if self.iq_info:
+            s += "    IQ:\n"
+            for key, label, unit in _IQ_FIELDS:
+                if key not in self.iq_info:
+                    continue
+                value = self.iq_info[key]
+                if unit and isinstance(value, (int, float)):
+                    shown = "%s%s" % (RigolWFM.channel.engineering_string(float(value), 3), unit)
+                elif isinstance(value, float) and value.is_integer():
+                    shown = "%d" % int(value)
+                else:
+                    shown = str(value)
+                s += "        %-13s= %s\n" % (label, shown)
             s += "\n"
 
         # Compute derived trigger levels: voltage at t=0 for relevant analog channels.

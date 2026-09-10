@@ -325,6 +325,17 @@ _TEKMETA_NUMERIC = {2: ("i", 4), 3: ("d", 8), 4: ("I", 4)}
 _DIGITAL_DATA_TYPE = 6
 _DIGITAL_LINES = 8
 
+# An IQ capture is only distinguishable by the acquisition parameters it records
+# in the tekmeta block; nothing in the fixed header marks it.
+_IQ_META_KEYS = (
+    "IQ_centerFrequency",
+    "IQ_fftLength",
+    "IQ_rbw",
+    "IQ_span",
+    "IQ_windowType",
+    "IQ_sampleRate",
+)
+
 
 def _parse_tekmeta(data: bytes, byte_order: str) -> dict[str, Any]:
     """Read the `tekmeta!` key/value block that Tektronix appends after the curve.
@@ -385,6 +396,11 @@ def _is_digital(data_type: int, meta: dict[str, Any]) -> bool:
     return data_type == _DIGITAL_DATA_TYPE or bool(_digital_line_names(meta))
 
 
+def _is_iq(meta: dict[str, Any]) -> bool:
+    """Report whether a capture holds interleaved I/Q pairs rather than one trace."""
+    return any(key in meta for key in _IQ_META_KEYS)
+
+
 def _unpack_digital_lines(raw_bytes: bytes, names: list[str]) -> dict[str, npt.NDArray[np.uint8]]:
     """Split packed digital bytes into one 0/1 trace per line.
 
@@ -399,6 +415,48 @@ def _unpack_digital_lines(raw_bytes: bytes, names: list[str]) -> dict[str, npt.N
     """
     packed = np.frombuffer(raw_bytes, dtype=np.uint8)
     return {name: ((packed >> bit) & 1).astype(np.uint8) for bit, name in enumerate(names)}
+
+
+def _assign_trace(
+    header: Header,
+    slot: int,
+    name: str,
+    volts: npt.NDArray[np.float32],
+    adc: npt.NDArray,
+    bytes_per_point: int,
+    volt_per_div: float,
+    dim_scale: float,
+    dim_offset: float,
+) -> None:
+    """Fill one normalized analog slot from calibrated volts and their codes.
+
+    Args:
+        header: the normalized header to populate.
+        slot: zero-based channel slot.
+        name: label for the trace, e.g. "CH1" or "I".
+        volts: calibrated samples.
+        adc: the raw codes those samples came from.
+        bytes_per_point: width of a stored code, used for the raw proxy.
+        volt_per_div: vertical scale to report.
+        dim_scale: volts per code.
+        dim_offset: volts at code zero.
+    """
+    channel = header.ch[slot]
+    channel.name = name
+    channel.enabled = True
+    channel.coupling = "DC"
+    channel.probe_value = 1.0
+    channel.volt_per_division = volt_per_div
+    channel.volt_scale = dim_scale
+    channel.volt_offset = dim_offset
+
+    header.channel_data[slot] = volts
+
+    # raw_data: store as uint8 proxy (high byte for 16-bit, direct for 8-bit)
+    if bytes_per_point == 2:
+        header.raw_data[slot] = (adc.astype(np.int16).view(np.uint16) >> 8).astype(np.uint8)
+    else:
+        header.raw_data[slot] = np.full(len(volts), 127, dtype=np.uint8)
 
 
 def _digital_waveform(
@@ -580,29 +638,40 @@ def from_file(file_name: str) -> TekWaveform:
     h = obj.header
     h.model = model_str
     h.trace_label = trace_label
-    h.n_pts = n_pts
     h.x_origin = t_origin
     h.x_increment = x_increment
 
-    # Tektronix .wfm files capture a single channel per file
-    slot = 0
-    ch = h.ch[slot]
-    ch.name = "CH1"
-    ch.enabled = True
-    ch.coupling = "DC"
-    ch.probe_value = 1.0
-    ch.volt_per_division = volt_per_div
-    ch.volt_scale = dim_scale
-    ch.volt_offset = dim_offset
+    if _is_iq(meta):
+        # Interleaved I/Q: even samples are in-phase, odd are quadrature.  One
+        # step of imp_dim1.dim_scale already covers a whole pair, so the time
+        # axis carries over unchanged and only the point count halves.
+        pairs = (len(volts) // 2) * 2
+        h.n_pts = pairs // 2
+        for slot, (name, start) in enumerate((("I", 0), ("Q", 1))):
+            _assign_trace(
+                h,
+                slot,
+                name,
+                volts[start:pairs:2],
+                adc[start:pairs:2],
+                bytes_per_point=bytes_per_point,
+                volt_per_div=volt_per_div,
+                dim_scale=dim_scale,
+                dim_offset=dim_offset,
+            )
+        return obj
 
-    h.channel_data[slot] = volts
-
-    # raw_data: store as uint8 proxy (high byte for 16-bit, direct for 8-bit)
-    adc_arr = adc.astype(np.int16) if bytes_per_point <= 2 else adc.astype(np.int32)
-    if bytes_per_point == 2:
-        raw8 = (adc_arr.view(np.uint16) >> 8).astype(np.uint8)
-    else:
-        raw8 = np.full(n_pts, 127, dtype=np.uint8)
-    h.raw_data[slot] = raw8
-
+    # Every other Tektronix .wfm captures a single channel per file
+    h.n_pts = n_pts
+    _assign_trace(
+        h,
+        0,
+        "CH1",
+        volts,
+        adc,
+        bytes_per_point=bytes_per_point,
+        volt_per_div=volt_per_div,
+        dim_scale=dim_scale,
+        dim_offset=dim_offset,
+    )
     return obj

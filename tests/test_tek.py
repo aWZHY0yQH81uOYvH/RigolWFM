@@ -462,14 +462,53 @@ def test_tektronix_precharge_does_not_shift_the_time_axis():
     assert channel.times[-1] == pytest.approx(1.0e-6 - 4.0e-11, rel=1e-9)
 
 
-def test_tektronix_iq_samples_are_not_yet_deinterleaved():
-    """An IQ capture parses, but its payload is not split into I and Q yet.
+def test_tektronix_iq_capture_splits_into_i_and_q():
+    """An IQ capture holds interleaved pairs and must come back as two traces.
 
-    `iq_waveform.wfm` holds 3625 interleaved I/Q pairs and comes back as 7250
-    real samples, so its time axis is twice as long as the capture really is.
+    The 7250 stored samples are 3625 I/Q pairs; `imp_dim1.dim_scale` already
+    steps one whole pair, so both traces share the file's time axis unchanged.
     """
-    iq = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm")).channels[0]
-    assert iq.points == 7250  # 3625 I/Q pairs, read as one interleaved real trace
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm"))
+
+    assert [channel.name for channel in waveform.channels] == ["I", "Q"]
+    for channel in waveform.channels:
+        assert channel.points == 3625
+        assert channel.times[0] == pytest.approx(-1.4496063e-3, rel=1e-6)
+        assert channel.times[1] - channel.times[0] == pytest.approx(4.00002e-7, rel=1e-5)
+
+    # even samples are in phase, odd are quadrature
+    assert waveform.channels[0].volts[0] == pytest.approx(0.1625, abs=1e-6)
+    assert waveform.channels[1].volts[0] == pytest.approx(-0.1482812, abs=1e-6)
+
+
+def test_tektronix_iq_matches_vendor_reader():
+    """The in-phase trace should match Tektronix's own decode of the same file."""
+    # tm_data_types returns 3625 normalized values for this capture, beginning
+    # 0.1625, 0.163125, 0.16390625 and ending 0.11609375.
+    channel = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm")).channels[0]
+
+    np.testing.assert_allclose(channel.volts[:3], [0.1625, 0.163125, 0.16390625], atol=1e-6)
+    assert channel.volts[-1] == pytest.approx(0.11609375, abs=1e-6)
+    assert channel.times[-1] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_tektronix_iq_parameters_are_reported():
+    """`Wfm` should carry the acquisition parameters an IQ capture records."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm"))
+
+    assert waveform.iq_info["IQ_centerFrequency"] == pytest.approx(1e6)
+    assert waveform.iq_info["IQ_rbw"] == pytest.approx(1e3)
+    described = waveform.describe()
+    assert "Center Freq  = 1.000 MHz" in described
+    assert "Window       = Blackharris" in described
+
+
+def test_tektronix_analog_capture_is_not_treated_as_iq():
+    """Only captures with IQ metadata split; ordinary analog files stay single."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "analog_waveform.wfm"))
+
+    assert len(waveform.channels) == 1
+    assert not waveform.iq_info
 
 
 def test_tektronix_tekmeta_is_decoded():

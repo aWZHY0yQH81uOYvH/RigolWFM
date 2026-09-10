@@ -695,6 +695,11 @@ class Channel:
         self.firmware = w.header.firmware_version
 
         idx = channel_number - 1
+        # An IQ capture fills its slots with I and Q rather than CH<n>, so keep
+        # whatever label the adapter gave the trace.
+        header_name = w.header.ch[idx].name if idx < len(w.header.ch) else ""
+        if header_name and not header_name.startswith("CH"):
+            self.name = header_name
         ch_data = w.header.channel_data[idx] if idx < len(w.header.channel_data) else None
         if ch_data is not None and self.enabled_and_selected:
             self.volts = ch_data.astype(np.float64)
