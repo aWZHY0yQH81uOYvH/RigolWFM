@@ -462,15 +462,109 @@ def test_tektronix_precharge_does_not_shift_the_time_axis():
     assert channel.times[-1] == pytest.approx(1.0e-6 - 4.0e-11, rel=1e-9)
 
 
-def test_tektronix_iq_and_digital_samples_load_but_are_not_interpreted():
-    """IQ and digital captures parse, but their payloads are not decoded as such.
+def test_tektronix_iq_capture_splits_into_i_and_q():
+    """An IQ capture holds interleaved pairs and must come back as two traces.
 
-    `iq_waveform.wfm` holds 3625 interleaved I/Q pairs and comes back as 7250
-    real samples; `digital_waveform.wfm` holds packed digital states and comes
-    back as scaled bytes.  Both are read as ordinary analog records for now.
+    The 7250 stored samples are 3625 I/Q pairs; `imp_dim1.dim_scale` already
+    steps one whole pair, so both traces share the file's time axis unchanged.
     """
-    iq = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm")).channels[0]
-    assert iq.points == 7250  # 3625 I/Q pairs, read as one interleaved real trace
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm"))
 
-    digital = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "digital_waveform.wfm")).channels[0]
-    assert digital.points == 2500
+    assert [channel.name for channel in waveform.channels] == ["I", "Q"]
+    for channel in waveform.channels:
+        assert channel.points == 3625
+        assert channel.times[0] == pytest.approx(-1.4496063e-3, rel=1e-6)
+        assert channel.times[1] - channel.times[0] == pytest.approx(4.00002e-7, rel=1e-5)
+
+    # even samples are in phase, odd are quadrature
+    assert waveform.channels[0].volts[0] == pytest.approx(0.1625, abs=1e-6)
+    assert waveform.channels[1].volts[0] == pytest.approx(-0.1482812, abs=1e-6)
+
+
+def test_tektronix_iq_matches_vendor_reader():
+    """The in-phase trace should match Tektronix's own decode of the same file."""
+    # tm_data_types returns 3625 normalized values for this capture, beginning
+    # 0.1625, 0.163125, 0.16390625 and ending 0.11609375.
+    channel = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm")).channels[0]
+
+    np.testing.assert_allclose(channel.volts[:3], [0.1625, 0.163125, 0.16390625], atol=1e-6)
+    assert channel.volts[-1] == pytest.approx(0.11609375, abs=1e-6)
+    assert channel.times[-1] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_tektronix_iq_parameters_are_reported():
+    """`Wfm` should carry the acquisition parameters an IQ capture records."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm"))
+
+    assert waveform.iq_info["IQ_centerFrequency"] == pytest.approx(1e6)
+    assert waveform.iq_info["IQ_rbw"] == pytest.approx(1e3)
+    described = waveform.describe()
+    assert "Center Freq  = 1.000 MHz" in described
+    assert "Window       = Blackharris" in described
+
+
+def test_tektronix_analog_capture_is_not_treated_as_iq():
+    """Only captures with IQ metadata split; ordinary analog files stay single."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "analog_waveform.wfm"))
+
+    assert len(waveform.channels) == 1
+    assert not waveform.iq_info
+
+
+def test_tektronix_tekmeta_is_decoded():
+    """The trailing `tekmeta!` block should decode to its key/value pairs."""
+    waveform = RigolWFM.tek.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm"))
+
+    assert waveform.tekmeta["IQ_centerFrequency"] == pytest.approx(1e6)
+    assert waveform.tekmeta["IQ_span"] == pytest.approx(1e6)
+    assert waveform.tekmeta["IQ_windowType"] == "Blackharris"
+
+
+def test_tektronix_tekmeta_survives_a_missing_or_broken_block():
+    """Metadata is optional, so an absent or truncated block must not raise."""
+    assert not RigolWFM.tek._parse_tekmeta(b"no metadata here", "<")
+    # a well-formed header promising an entry the file does not contain
+    truncated = b"tekmeta!" + struct.pack("<I", 1) + struct.pack("<I", 4) + b"ke"
+    assert not RigolWFM.tek._parse_tekmeta(truncated, "<")
+
+
+def test_tektronix_digital_capture_yields_logic_traces():
+    """A digital capture should expose one 0/1 trace per line, not fake volts."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "digital_waveform.wfm"))
+
+    # the bytes are packed logic states, so there is no analog channel at all
+    assert not waveform.channels
+    assert list(waveform.logic_channels) == [f"d{bit}" for bit in range(8)]
+
+    for trace in waveform.logic_channels.values():
+        assert len(trace) == 2500
+        assert set(np.unique(trace)) <= {0, 1}
+
+    assert waveform.logic_seconds_per_point == pytest.approx(4.0e-11)
+    assert waveform.logic_times[0] == pytest.approx(-5.0e-8)
+
+
+def test_tektronix_digital_lines_carry_the_recorded_pulse():
+    """Each line holds one pulse, staggered by the capture's channel skew.
+
+    Every line starts high, drops near -29.8 ns and returns high near +16 ns.
+    Reading the bytes as a voltage instead of unpacking their bits hid this.
+    """
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "digital_waveform.wfm"))
+    times = np.asarray(waveform.logic_times)
+
+    for name, trace in waveform.logic_channels.items():
+        edges = np.flatnonzero(np.diff(np.asarray(trace)))
+        assert len(edges) == 2, f"{name} should hold exactly one pulse"
+        assert trace[0] == 1
+        assert times[edges[0]] == pytest.approx(-29.8e-9, abs=0.5e-9)
+        assert times[edges[1]] == pytest.approx(16.3e-9, abs=1.5e-9)
+
+
+def test_tektronix_digital_bit_order_puts_d0_in_the_least_significant_bit():
+    """Line order follows bit order, d0 first."""
+    packed = bytes([0b00000001, 0b10000000, 0b00000000])
+    lines = RigolWFM.tek._unpack_digital_lines(packed, [f"d{bit}" for bit in range(8)])
+
+    np.testing.assert_array_equal(lines["d0"], [1, 0, 0])
+    np.testing.assert_array_equal(lines["d7"], [0, 1, 0])

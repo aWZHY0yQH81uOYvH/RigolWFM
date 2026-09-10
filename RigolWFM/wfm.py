@@ -139,6 +139,16 @@ _LECROY_MAGIC = b"WAVEDESC"
 _TEK_MAGIC = b"WFM#"
 _ISF_MAGIC = b":CURV"  # matches both ":CURV #" and ":CURVE #"
 
+# Acquisition parameters an IQ capture records, in the order they are reported.
+_IQ_FIELDS = (
+    ("IQ_centerFrequency", "Center Freq", "Hz"),
+    ("IQ_span", "Span", "Hz"),
+    ("IQ_rbw", "RBW", "Hz"),
+    ("IQ_sampleRate", "Sample Rate", "Hz"),
+    ("IQ_fftLength", "FFT Length", ""),
+    ("IQ_windowType", "Window", ""),
+)
+
 _CANONICAL_PARSER_NAMES = {
     "rigol_1000b_wfm": "wfm1000b",
     "rigol_1000c_wfm": "wfm1000c",
@@ -571,6 +581,7 @@ class Wfm:
         self.logic_times: npt.NDArray[np.float64] | None = None
         self.logic_seconds_per_point: float | None = None
         self.logic_time_offset: float | None = None
+        self.iq_info: dict = {}
 
     @classmethod
     def from_file(cls, file_name: str, model: str = "auto", selected: str = "1234") -> "Wfm":
@@ -698,6 +709,28 @@ class Wfm:
                     logic_start = -float(logic_x_origin)
                     new_wfm.logic_times = (
                         logic_start + np.arange(len(first_trace)) * new_wfm.logic_seconds_per_point
+                    ).astype(np.float64)
+        elif pname == "tek_wfm":
+            new_wfm.iq_info = {key: value for key, value in getattr(w, "tekmeta", {}).items() if key.startswith("IQ_")}
+            logic_channels = getattr(w, "logic_channels", {})
+            if logic_channels:
+                # Unlike bin5000, which stores x_origin negated, the Tektronix
+                # adapter reports the true time of sample zero.
+                new_wfm.logic_channels = logic_channels
+                new_wfm.logic_observed_channels = logic_channels
+                new_wfm.logic_seconds_per_point = getattr(w, "logic_x_increment", None)
+                tek_logic_start = getattr(w, "logic_x_origin", None)
+                if tek_logic_start is not None:
+                    new_wfm.logic_time_offset = float(tek_logic_start)
+
+                first_trace = next(iter(logic_channels.values()), None)
+                if (
+                    first_trace is not None
+                    and new_wfm.logic_seconds_per_point is not None
+                    and tek_logic_start is not None
+                ):
+                    new_wfm.logic_times = (
+                        float(tek_logic_start) + np.arange(len(first_trace)) * new_wfm.logic_seconds_per_point
                     ).astype(np.float64)
 
         # Warn when the model embedded in the file clearly disagrees with the
@@ -859,6 +892,21 @@ class Wfm:
                 s += "]\n"
             s += "\n"
 
+        if self.iq_info:
+            s += "    IQ:\n"
+            for key, label, unit in _IQ_FIELDS:
+                if key not in self.iq_info:
+                    continue
+                value = self.iq_info[key]
+                if unit and isinstance(value, (int, float)):
+                    shown = "%s%s" % (RigolWFM.channel.engineering_string(float(value), 3), unit)
+                elif isinstance(value, float) and value.is_integer():
+                    shown = "%d" % int(value)
+                else:
+                    shown = str(value)
+                s += "        %-13s= %s\n" % (label, shown)
+            s += "\n"
+
         # Compute derived trigger levels: voltage at t=0 for relevant analog channels.
         _source = self.trigger_info.get("source", "")
         _CH_SOURCE_MAP = {"CH1": 1, "CH2": 2, "CH3": 3, "CH4": 4}
@@ -999,6 +1047,18 @@ class Wfm:
     def plot(self) -> "Figure":
         """Plot the data in oscilloscope style and return the Figure."""
         _CH_COLORS = ["#FFFF00", "#00FFFF", "#FF00FF", "#00FF00"]
+        # Logic captures routinely run to 8 or 16 lines, so they need more than
+        # the four scope-trace colours to stay tellable apart.
+        _LOGIC_COLORS = [
+            "#ffff00",
+            "#00ffff",
+            "#ff00ff",
+            "#00ff00",
+            "#ff8800",
+            "#88aaff",
+            "#ff5577",
+            "#bbbbbb",
+        ]
 
         h_scale, h_prefix, v_scale, v_prefix = self.best_scaling()
 
@@ -1014,10 +1074,27 @@ class Wfm:
                 linewidth=0.8,
             )
 
+        # A logic-only capture has nothing on the voltage axis, so draw the
+        # traces themselves: stacked, stepped, one row per line.
+        logic_only = not self.channels and self.logic_channels and self.logic_times is not None
+        if logic_only:
+            for i, (name, trace) in enumerate(self.logic_channels.items()):
+                ax.step(
+                    np.asarray(self.logic_times) * h_scale,
+                    np.asarray(trace, dtype=np.float64) * 0.8 + i,
+                    where="post",
+                    label=name,
+                    color=_LOGIC_COLORS[i % len(_LOGIC_COLORS)],
+                    linewidth=0.8,
+                )
+            ax.set_yticks([i + 0.4 for i in range(len(self.logic_channels))])
+            ax.set_yticklabels(list(self.logic_channels), color="white")
+
         ax.set_xlabel("Time (%ss)" % h_prefix, color="white")
-        ax.set_ylabel("Voltage (%sV)" % v_prefix, color="white")
+        ax.set_ylabel("Logic" if logic_only else "Voltage (%sV)" % v_prefix, color="white")
         ax.set_title(self.basename, color="white")
-        ax.legend(loc="upper right", facecolor="black", edgecolor="#555555", labelcolor="white")
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="upper right", facecolor="black", edgecolor="#555555", labelcolor="white")
 
         ax.grid(True, which="major", color="#2a2a2a", linewidth=0.8, linestyle="-")
         ax.minorticks_on()
