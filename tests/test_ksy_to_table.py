@@ -48,7 +48,7 @@ def test_rst_output_preserves_schema_doc_and_includes_types_and_enums():
 
 
 def test_rst_output_includes_parameters_and_size_eos():
-    """reStructuredText output should render top-level params and size-eos fields."""
+    """Top-level params and size-eos fields should render in the reStructuredText output."""
     result = _run_script("ksy/yokogawa_dl_we_wvf.ksy")
 
     assert result.returncode == 0, result.stderr

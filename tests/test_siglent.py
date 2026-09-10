@@ -1,10 +1,12 @@
 """Tests for Siglent waveform binary parsing."""
 
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+import RigolWFM.channel
 import RigolWFM.siglent
 import RigolWFM.wfm
 
@@ -296,3 +298,96 @@ def test_siglent_old_platform_is_detectable_but_not_normalized(tmp_path):
     assert RigolWFM.wfm.detect_model(str(path)) == "SiglentOld"
     with pytest.raises(ValueError, match="does not normalize"):
         RigolWFM.wfm.Wfm.from_file(str(path))
+
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+# Real SDS814X HD captures of known levels. These pin the V4.0 conversion to hardware:
+# the vendor PDF's "+ vert_offset" and an unapplied probe factor both land far outside
+# these tolerances.
+_V4_KNOWN_LEVEL_CASES = [
+    ("SDS814X-3v0-probe1x.bin", 3.0, 1.0),  # 3.0 V line, 1x probe, 1 V/div
+    ("SDS814X-3v0-probe10x.bin", 3.0, 1.0),  # same line, 10x probe, 0.1 V/div stored
+    ("SDS814X-4v5-dc.bin", 4.5, 0.2),  # flat 4.5 V DC, 0 V far off-screen, 10x probe
+]
+
+
+@pytest.mark.parametrize("file_name, expected_high, expected_volt_per_division", _V4_KNOWN_LEVEL_CASES)
+def test_siglent_v4_known_levels(file_name, expected_high, expected_volt_per_division):
+    """V4.0 captures of known levels decode to the expected voltages."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_ROOT / "tests" / "files" / "bin" / file_name), model="auto")
+    channel = waveform.channels[0]
+    volts = np.asarray(channel.volts)
+    high = float(np.median(volts[volts >= (volts.min() + volts.max()) / 2.0]))
+    assert high == pytest.approx(expected_high, abs=0.1)
+    # the reported scale must describe the probe-scaled volts, not the stored volt_div
+    assert channel.volt_per_division == pytest.approx(expected_volt_per_division, rel=1e-6)
+
+
+# The amps, math and zoom captures below come from the SDS814X HD fixtures in
+# https://github.com/vindavs/siglent-bin (MIT), whose SPEC.md records the bench
+# conditions each one was taken under.
+def _v4_channel(file_name, index=0):
+    """Load one normalized channel from a real V4.0 capture."""
+    waveform = RigolWFM.wfm.Wfm.from_file(str(_ROOT / "tests" / "files" / "bin" / file_name), model="auto")
+    return waveform.channels[index]
+
+
+def test_siglent_v4_reads_the_unit_descriptor():
+    """A capture taken in amps display mode reports amps, not volts."""
+    channel = _v4_channel("SDS814X-amps-300ma.bin")
+    volts = np.asarray(channel.volts)
+    high = float(np.median(volts[volts >= (volts.min() + volts.max()) / 2.0]))
+
+    assert channel.unit == RigolWFM.channel.UnitEnum.a
+    # in amps mode the probe field holds a 1/(V/A) factor, giving the scope's reading
+    assert high == pytest.approx(0.3, abs=0.01)
+
+
+def test_siglent_v4_volt_descriptor_still_reads_as_volts():
+    """An ordinary voltage capture keeps its volt unit."""
+    assert _v4_channel("SDS814X-3v0-probe1x.bin").unit == RigolWFM.channel.UnitEnum.v
+
+
+@pytest.mark.parametrize(
+    "words, expected",
+    [
+        ((0, 1, 1, 0, 1, 0, 1), RigolWFM.channel.UnitEnum.v),
+        ((0, 0, 1, 1, 1, 0, 1), RigolWFM.channel.UnitEnum.a),
+        ((0, 1, 1, 1, 1, 0, 1), RigolWFM.channel.UnitEnum.w),
+        ((0, 0, 1, 0, 1, 1, 1), RigolWFM.channel.UnitEnum.u),  # seconds
+        ((5, 0, 0, 0, 0, 0, 0), RigolWFM.channel.UnitEnum.v),  # Vdc names volts outright
+        ((3, 0, 0, 0, 0, 0, 0), RigolWFM.channel.UnitEnum.u),  # dB
+        ((0, 1, 0, 0, 0, 0, 0), RigolWFM.channel.UnitEnum.u),  # zero denominators
+    ],
+)
+def test_siglent_unit_descriptor_mapping(words, expected):
+    """The seven-word unit descriptor maps onto the units the library can express."""
+    assert RigolWFM.siglent._unit_from_words(words) == expected
+
+
+def test_siglent_v4_math_trace_is_detected_and_scaled():
+    """A math (F1) save has no analog channel enabled but still normalizes."""
+    math_trace = _v4_channel("SDS814X-math-f1.bin")
+    source = _v4_channel("SDS814X-math-c1.bin")
+
+    assert math_trace.name == "F1"
+    assert math_trace.unit == RigolWFM.channel.UnitEnum.v
+    assert math_trace.volt_per_division == pytest.approx(10.0)
+    assert math_trace.probe_value == pytest.approx(1.0)  # math traces carry no probe factor
+
+    # F1 = invert(C1 + C1), so it must track -2x its companion channel save to
+    # within the one math code (10 V/div over 7680 codes/div) that separates them.
+    difference = np.abs(np.asarray(math_trace.volts) + 2.0 * np.asarray(source.volts))
+    assert difference.max() < 2.0 * 10.0 / 7680.0
+
+
+def test_siglent_v4_zoom_save_uses_the_zoom_timebase():
+    """A zoom (Z1) save times its samples with the zoom window, not the main sweep."""
+    channel = _v4_channel("SDS814X-zoom-z1.bin")
+    times = np.asarray(channel.times)
+
+    # zoom window: 2 ms/div over 10 divisions, centered at +15 ms
+    assert len(times) == 200
+    assert times[0] == pytest.approx(0.015 - 0.010, abs=1e-9)
+    assert times[-1] - times[0] == pytest.approx(0.020 - 1e-4, abs=1e-9)

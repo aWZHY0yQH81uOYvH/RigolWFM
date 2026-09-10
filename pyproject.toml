@@ -260,6 +260,8 @@ ignore = [
     "wfm/*",
     "ksy/*",
     "tests/files/wfm/*.wfm",
+    "tests/files/wfm-tek/*.wfm",
+    "tests/files/wfm-tek/SOURCE.rst",
 ]
 
 [tool.mypy]
