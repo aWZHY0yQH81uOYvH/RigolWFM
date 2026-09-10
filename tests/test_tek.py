@@ -1,6 +1,7 @@
 """Tests for Tektronix WFM parsing, including WFM#003 layout handling."""
 
 import io
+from pathlib import Path
 import struct
 
 import numpy as np
@@ -146,8 +147,7 @@ def _build_tek_wfm(
 
     # Static file info (78 bytes)
     put(0, "H", 0x0F0F)
-    buf[2:9] = version.encode("ascii")
-    buf[9] = 0
+    buf[2:10] = f":{version}".encode("ascii")
     put(10, "B", 0)
     put(11, "i", file_size - 15)
     put(15, "B", 1)
@@ -324,6 +324,16 @@ def test_wfm002_synthetic_from_file(tmp_path):
     assert obj.header.x_increment == pytest.approx(2.5e-9)
 
 
+def test_wfm002_synthetic_autodetect(tmp_path):
+    """detect_model() should classify Synthetic WFM#002 files as Tek."""
+    samples = [-8, -1, 0, 7, 12]
+    data = _build_tek_wfm(version="WFM#002", samples=samples)
+    path = tmp_path / "synthetic_002_autodetect.wfm"
+    path.write_bytes(data)
+
+    assert RigolWFM.wfm.detect_model(str(path)) == "Tek"
+
+
 def test_wfm003_parser_uses_post_point_density_offsets():
     """WFM#003 should parse fields after point_density at their correct shifted offsets."""
     samples = [-3, 1, 4, 8]
@@ -370,6 +380,24 @@ def test_wfm003_synthetic_from_file(tmp_path):
     np.testing.assert_allclose(waveform.channels[0].times, expected_times)
 
 
+def test_wfm003_synthetic_autodetect(tmp_path):
+    """detect_model() should classify Synthetic WFM#003 files as Tek."""
+    samples = [-10, -5, 0, 5, 10]
+    data = _build_tek_wfm(
+        version="WFM#003",
+        samples=samples,
+        dim_scale=0.05,
+        dim_offset=0.25,
+        time_scale=1.25e-9,
+        time_offset=-2.5e-9,
+        label="DPO7000",
+    )
+    path = tmp_path / "synthetic_003_auto.wfm"
+    path.write_bytes(data)
+
+    assert RigolWFM.wfm.detect_model(str(path)) == "Tek"
+
+
 def test_legacy_llwfm_synthetic_from_file(tmp_path):
     """Legacy LLWFM files should parse through the Tek adapter."""
     samples = [-2048, -1024, 0, 1024, 2047]
@@ -393,3 +421,56 @@ def test_legacy_llwfm_autodetect(tmp_path):
     path.write_bytes(_build_legacy_llwfm(samples=[-1, 0, 1]))
 
     assert RigolWFM.wfm.detect_model(str(path)) == "Tek"
+
+
+# Real WFM#003 captures published by Tektronix.  The expected values below were
+# read from the same files with Tektronix's own `tm_data_types` library, so they
+# pin this parser to the vendor's interpretation rather than to itself.
+_TEK_SAMPLES = Path(__file__).resolve().parents[1] / "tests" / "files" / "wfm-tek"
+
+_TEK_GOLDEN = [
+    # name, points, t0, dt, first volts, last volts
+    ("analog_waveform.wfm", 50_000, -1.0e-6, 4.0e-11, -0.148, 0.144),
+    ("data_test_waveform.wfm", 1_000, -2.0e-8, 4.0e-11, -0.004, -0.008),
+    ("golden_analog.wfm", 6, -3.0, 1.0, 0.0003051851, 0.9834284494),
+]
+
+
+@pytest.mark.parametrize("name, points, t0, dt, first_volts, last_volts", _TEK_GOLDEN)
+def test_tektronix_sample_matches_vendor_reader(name, points, t0, dt, first_volts, last_volts):
+    """Published Tektronix captures should decode the way Tektronix decodes them."""
+    channel = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / name)).channels[0]
+
+    assert channel.points == points
+    assert len(channel.times) == points
+    assert channel.times[0] == pytest.approx(t0, rel=1e-9)
+    assert channel.times[1] - channel.times[0] == pytest.approx(dt, rel=1e-9)
+    assert channel.volts[0] == pytest.approx(first_volts, abs=1e-6)
+    assert channel.volts[-1] == pytest.approx(last_volts, abs=1e-6)
+
+
+def test_tektronix_precharge_does_not_shift_the_time_axis():
+    """A curve buffer opening with precharge must not double-count it in t0.
+
+    `analog_waveform.wfm` carries 32 precharge samples and a 50000-sample record
+    centered on the trigger, so the axis has to run from -1 us to +1 us.  Adding
+    `first_valid_sample` to `dim_offset` pushed it 32 samples late.
+    """
+    channel = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "analog_waveform.wfm")).channels[0]
+
+    assert channel.times[0] == pytest.approx(-1.0e-6, rel=1e-9)
+    assert channel.times[-1] == pytest.approx(1.0e-6 - 4.0e-11, rel=1e-9)
+
+
+def test_tektronix_iq_and_digital_samples_load_but_are_not_interpreted():
+    """IQ and digital captures parse, but their payloads are not decoded as such.
+
+    `iq_waveform.wfm` holds 3625 interleaved I/Q pairs and comes back as 7250
+    real samples; `digital_waveform.wfm` holds packed digital states and comes
+    back as scaled bytes.  Both are read as ordinary analog records for now.
+    """
+    iq = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "iq_waveform.wfm")).channels[0]
+    assert iq.points == 7250  # 3625 I/Q pairs, read as one interleaved real trace
+
+    digital = RigolWFM.wfm.Wfm.from_file(str(_TEK_SAMPLES / "digital_waveform.wfm")).channels[0]
+    assert digital.points == 2500

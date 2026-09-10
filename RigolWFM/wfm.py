@@ -327,8 +327,9 @@ def _detect_model_from_header(hdr: bytes, fsize: int, filename_hint: str = "") -
     if b"LLWFM" in hdr[:8]:
         return "Tek"
 
-    # Tektronix .wfm: byte_order word at 0 (0x0F0F LE or 0xF0F0 BE), version "WFM#" at offset 2
-    if hdr[0] in (0x0F, 0xF0) and hdr[1] in (0x0F, 0xF0) and hdr[2:6] == _TEK_MAGIC:
+    # Tektronix .wfm: byte_order word at 0 (0x0F0F LE or 0xF0F0 BE), then the
+    # eight-byte version string ":WFM#00n", so the magic sits at offset 3.
+    if hdr[0] in (0x0F, 0xF0) and hdr[1] in (0x0F, 0xF0) and hdr[3:7] == _TEK_MAGIC:
         return "Tek"
 
     # Tektronix .isf: ASCII header containing ":CURV " or ":CURVE " followed by '#'
@@ -1104,9 +1105,11 @@ class Wfm:
             raise ValueError(f"PWL supports only one channel, but {names} are enabled and selected")
 
         channel = usable[0]
-        t0 = channel.times[0]
+        times = np.asarray(channel.times, dtype=float)
+        volts = np.asarray(channel.volts, dtype=float)
+        t0 = times[0]
 
-        rows = [f"{t - t0:.7g}\t{v:.7g}" for t, v in zip(channel.times, channel.volts)]
+        rows = [f"{t - t0:.7g}\t{v:.7g}" for t, v in zip(times, volts)]
         return "\n".join(rows) + "\n"
 
     def sigrokcsv(self) -> str:

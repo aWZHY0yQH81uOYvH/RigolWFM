@@ -251,11 +251,7 @@ def _v4_math_sample_count(data: bytes) -> int:
     """Total math (F1-F4) sample count claimed by a V4.0 header."""
     if len(data) < 0x3E0:
         return 0
-    return sum(
-        _u32le(data, 0x3D0 + 4 * index)
-        for index in range(4)
-        if _u32le(data, 0x280 + 4 * index) == 1
-    )
+    return sum(_u32le(data, 0x3D0 + 4 * index) for index in range(4) if _u32le(data, 0x280 + 4 * index) == 1)
 
 
 def _looks_like_v4(data: bytes, file_size: int) -> bool:
@@ -468,12 +464,13 @@ def _unit_from_words(words: Any) -> RigolWFM.channel.UnitEnum:
     if unit_type != 0:
         return unknown
 
-    exponents = (
-        _unit_exponent(entries[1], entries[2]),
-        _unit_exponent(entries[3], entries[4]),
-        _unit_exponent(entries[5], entries[6]),
-    )
-    name = _COMPOSED_UNITS.get(exponents)
+    volts = _unit_exponent(entries[1], entries[2])
+    amps = _unit_exponent(entries[3], entries[4])
+    seconds = _unit_exponent(entries[5], entries[6])
+    if volts is None or amps is None or seconds is None:
+        return unknown
+
+    name = _COMPOSED_UNITS.get((volts, amps, seconds))
     return RigolWFM.channel.UnitEnum[name] if name else unknown
 
 
