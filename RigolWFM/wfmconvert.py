@@ -134,6 +134,42 @@ def csv(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> 
         f.write(b)
 
 
+def pwl(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> bool:
+    """Create a piecewise linear (PWL) file for use in LTspice.
+
+    A PWL file holds explicit time/voltage pairs, so it preserves the
+    waveform's voltage scale and offset; LTspice instead reads a WAV source
+    against a fixed -1 V to +1 V full-scale range.  The output is a headerless,
+    tab-separated, two-column text file representing one waveform.
+    """
+    pwl_name = _output_path(infile, ".pwl", args.output_dir)
+
+    if os.path.isfile(pwl_name) and not args.force:
+        print(f"'{pwl_name}' exists, use --force to overwrite")
+        return True
+
+    # A PWL source drives one node, so the file may hold only one trace.  Which
+    # channels survive `--channel` is a property of the waveform, not of the
+    # option text, so let the export decide and report what it found.
+    try:
+        s = scope_data.pwl()
+    except ValueError as e:
+        print(
+            f"wfmconvert error: {e}.\nUse --channel to select a single channel.",
+            file=sys.stderr,
+        )
+        return False
+
+    if not s:
+        print("No analog channels are available to export to PWL.", file=sys.stderr)
+        return False
+
+    with open(pwl_name, "wb") as f:
+        b = s.encode(encoding="utf-8")
+        f.write(b)
+    return True
+
+
 def npz(args: argparse.Namespace, scope_data: RigolWFM.wfm.Wfm, infile: str) -> None:
     """Create a NumPy `.npz` archive."""
     npz_name = _output_path(infile, ".npz", args.output_dir)
@@ -334,6 +370,7 @@ def main() -> None:
             wfmconvert --channel 124 sigrok DS1102E.wfm
             wfmconvert --channel 3 --scale scope wav DS1102E.wfm
             wfmconvert --channel 12 --scale scope wav DS1102E.wfm
+            wfmconvert --channel 1 pwl DS1102E.wfm
             wfmconvert --model C info DS1042C-A.wfm
         """),
     )
@@ -406,7 +443,7 @@ def main() -> None:
 
     parser.add_argument(
         dest="action",
-        choices=["csv", "info", "png", "wav", "sigrok", "npz", "mat"],
+        choices=["csv", "info", "png", "wav", "pwl", "sigrok", "npz", "mat"],
         help=textwrap.dedent("""\
         csv:    convert to a file with comma separated values
         info:   show the various scope settings for a waveform file
@@ -414,6 +451,7 @@ def main() -> None:
         mat:    save waveform arrays in a MATLAB `.mat` file
         png:    save a waveform plot as a PNG image (use --dpi to set resolution)
         wav:    convert to a WAV sound format file for use with Pulseview or LTspice.
+        pwl:    convert one channel to a piecewise linear file for LTspice
         sigrok: convert to a sigrok file
         """),
     )
@@ -439,7 +477,7 @@ def main() -> None:
         print(f'You used "--channel {args.channel}"')
         sys.exit(1)
 
-    actionMap = {"info": info, "csv": csv, "npz": npz, "mat": mat, "png": png, "wav": wav, "sigrok": sigrok}
+    actionMap = {"info": info, "csv": csv, "npz": npz, "mat": mat, "png": png, "wav": wav, "pwl": pwl, "sigrok": sigrok}
 
     for filename in args.infile:
         try:

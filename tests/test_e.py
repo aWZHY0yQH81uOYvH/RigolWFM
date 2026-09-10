@@ -71,6 +71,45 @@ def test_wav_export_accepts_pathlike_output(tmp_path):
         assert handle.getnframes() == 8192
 
 
+def test_pwl_export_matches_the_channel_data():
+    """`Wfm.pwl()` should tabulate one channel against a zero-based time axis."""
+    waveform = RigolWFM.wfm.Wfm.from_file("tests/files/wfm/DS1102E-D.wfm", "E", selected="1")
+    channel = waveform.channels[0]
+
+    rows = waveform.pwl().splitlines()
+
+    assert len(rows) == channel.points
+    first_time, first_volts = rows[0].split("\t")
+    assert float(first_time) == 0.0
+    assert float(first_volts) == pytest.approx(channel.volts[0], abs=1e-6)
+
+    last_time, last_volts = rows[-1].split("\t")
+    assert float(last_time) == pytest.approx(channel.times[-1] - channel.times[0], rel=1e-6)
+    assert float(last_volts) == pytest.approx(channel.volts[-1], abs=1e-6)
+
+
+def test_pwl_export_ends_with_a_newline():
+    """LTspice reads the table line by line, so the last row needs terminating."""
+    waveform = RigolWFM.wfm.Wfm.from_file("tests/files/wfm/DS1102E-D.wfm", "E", selected="1")
+
+    assert waveform.pwl().endswith("\n")
+
+
+def test_pwl_export_rejects_more_than_one_channel():
+    """A PWL source drives one node, so two selected channels are ambiguous."""
+    waveform = RigolWFM.wfm.Wfm.from_file("tests/files/wfm/DS1102E-D.wfm", "E")
+
+    with pytest.raises(ValueError, match="only one channel"):
+        waveform.pwl()
+
+
+def test_pwl_export_is_empty_without_channels():
+    """With nothing selected there is no trace to write."""
+    waveform = RigolWFM.wfm.Wfm.from_file("tests/files/wfm/DS1102E-D.wfm", "E", selected="3")
+
+    assert waveform.pwl() == ""
+
+
 def test_wav_export_rejects_channel_that_is_not_selected(tmp_path):
     """`Wfm.wav()` should reject channels excluded by the `selected=` filter."""
     waveform = RigolWFM.wfm.Wfm.from_file("tests/files/wfm/DS1102E-D.wfm", "E", selected="1")

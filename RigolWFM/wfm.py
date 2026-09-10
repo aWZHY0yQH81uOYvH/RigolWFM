@@ -1071,6 +1071,46 @@ class Wfm:
             s += "\n"
         return s
 
+    def pwl(self) -> str:
+        """Return a piecewise linear (PWL) table for LTspice.
+
+        Unlike a WAV source, which LTspice interprets using a fixed -1 V to
+        +1 V full-scale range, a PWL file contains explicit time/voltage pairs,
+        preserving the waveform's voltage scale and offset.  It is a
+        headerless, two-column plain-text file representing one waveform; this
+        exporter uses tabs as separators.
+
+        Since a PWL source starts when the simulation does, times are shifted
+        so that the first sample sits at t=0.  Both columns carry seven
+        significant digits, which keeps the file small while staying well
+        inside the resolution of any scope this library reads.
+
+        Returns:
+            The PWL table, or an empty string when no channel carries data.
+
+        Raises:
+            ValueError: if more than one channel is enabled and selected,
+                since one file describes one waveform.
+        """
+        usable = [
+            ch
+            for ch in self.channels
+            if ch.enabled_and_selected and ch.times is not None and ch.volts is not None and ch.points > 0
+        ]
+
+        if len(usable) == 0:
+            return ""
+
+        if len(usable) > 1:
+            names = ", ".join(ch.name for ch in usable)
+            raise ValueError(f"PWL supports only one channel, but {names} are enabled and selected")
+
+        channel = usable[0]
+        t0 = channel.times[0]
+
+        rows = [f"{t - t0:.7g}\t{v:.7g}" for t, v in zip(channel.times, channel.volts)]
+        return "\n".join(rows) + "\n"
+
     def sigrokcsv(self) -> str:
         """Return a string of comma separated values for sigrok."""
         times, series = self._csv_series()

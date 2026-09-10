@@ -136,6 +136,37 @@ def test_wfmconvert_wav(tmp_path):
         run_command(f"wfmconvert --model {scope} --channel 1 --output-dir {shlex.quote(str(tmp_path))} wav {path}")
 
 
+def test_wfmconvert_pwl(tmp_path):
+    """Verify PWL export succeeds for representative scopes."""
+    for scope, path in _LEGACY_INFO + _BIN_INFO:
+        run_command(f"wfmconvert --model {scope} --channel 1 --output-dir {tmp_path} pwl {path}")
+    for scope, path in _newer_family_cases(tmp_path):
+        run_command(f"wfmconvert --model {scope} --channel 1 --output-dir {shlex.quote(str(tmp_path))} pwl {path}")
+
+
+def test_wfmconvert_pwl_uses_the_only_enabled_channel(tmp_path):
+    """A single-channel capture should not need an explicit `--channel`."""
+    run_command(f"wfmconvert --model E --output-dir {tmp_path} pwl tests/files/wfm/DS1102E-A.wfm")
+
+    rows = (tmp_path / "DS1102E-A.pwl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) > 1
+    # a PWL source starts when the simulation does, so the table starts at t=0
+    assert rows[0].split("\t")[0] == "0"
+    for row in rows:
+        assert len(row.split("\t")) == 2
+
+
+def test_wfmconvert_pwl_rejects_several_enabled_channels(tmp_path):
+    """PWL drives one node, so a two-channel capture must be narrowed first."""
+    result = run_command_failure(f"wfmconvert --model E --output-dir {tmp_path} pwl tests/files/wfm/DS1102E-D.wfm")
+
+    assert "only one channel" in result.stderr
+    assert not list(Path(tmp_path).glob("*.pwl"))
+
+    run_command(f"wfmconvert --model E --channel 2 --output-dir {tmp_path} pwl tests/files/wfm/DS1102E-D.wfm")
+    assert (tmp_path / "DS1102E-D.pwl").is_file()
+
+
 def test_wfmconvert_sigrok(tmp_path):
     """Verify sigrok export either writes output or reports the missing dependency."""
     for scope, path in _LEGACY_INFO + _BIN_INFO:

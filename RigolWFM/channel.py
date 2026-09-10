@@ -717,6 +717,11 @@ class Channel:
         self.firmware = w.header.firmware_version
 
         idx = channel_number - 1
+        # Math (F1-F4) traces land in ordinary channel slots, so keep the label the
+        # Siglent adapter gave them instead of the generic "CH <n>".
+        header_name = w.header.ch[idx].name if idx < len(w.header.ch) else ""
+        if header_name and not header_name.startswith("CH"):
+            self.name = header_name
         ch_data = w.header.channel_data[idx] if idx < len(w.header.channel_data) else None
         if ch_data is not None and self.enabled_and_selected:
             self.volts = ch_data.astype(np.float64)
